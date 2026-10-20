@@ -76,6 +76,7 @@ namespace cobra {
     }
 
     bool IsConstantSubtree(const Expr &expr) {
+        ::cobra::budget::Checkpoint();
         if (expr.kind == Expr::Kind::kConstant) { return true; }
         if (expr.kind == Expr::Kind::kVariable) { return false; }
         return std::ranges::all_of(expr.children,
@@ -83,6 +84,7 @@ namespace cobra {
     }
 
     bool ContainsType(const Expr &expr, Expr::Kind kind) {
+        ::cobra::budget::Checkpoint();
         if (expr.kind == kind) { return true; }
         return std::ranges::any_of(
             expr.children, [kind](const auto &child) { return ContainsType(*child, kind); });

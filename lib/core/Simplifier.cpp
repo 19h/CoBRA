@@ -29,6 +29,7 @@ namespace cobra {
         }
 
         bool IsPurelyArithmetic(const Expr &e) {
+            ::cobra::budget::Checkpoint();
             switch (e.kind) {
                 case Expr::Kind::kConstant:
                 case Expr::Kind::kVariable:
@@ -44,6 +45,7 @@ namespace cobra {
         }
 
         bool HasNotOverArith(const Expr &e) {
+            ::cobra::budget::Checkpoint();
             if (e.kind == Expr::Kind::kNot && !e.children.empty()
                 && IsPurelyArithmetic(*e.children[0]))
             {

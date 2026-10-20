@@ -77,6 +77,7 @@ namespace cobra {
         void RenderImpl(std::ostringstream &out, const Expr &expr,
                         const cobra::BudgetVector< std::string > &var_names, uint32_t bitwidth,
                         int parent_prec) {
+            ::cobra::budget::Checkpoint();
             switch (expr.kind) {
                 case Expr::Kind::kConstant: {
                     // SignBitMask(0) returns 0, which causes the
