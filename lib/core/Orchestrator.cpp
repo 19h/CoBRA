@@ -1,4 +1,5 @@
 #include "Orchestrator.h"
+#include "MaskedLeafLift.h"
 #include "OrchestratorPasses.h"
 #include "SemilinearPasses.h"
 #include "SignaturePasses.h"
@@ -961,6 +962,14 @@ namespace cobra {
             return Err< SimplifyOutcome >(CobraError::kInvalidArgument,
                                           "bitwidth must be in [1, 64]; got "
                                               + std::to_string(opts.bitwidth));
+        }
+
+        // Lift complete masked leaves before solving the outer MBA. The
+        // recursive input has fewer masked-leaf nodes and inherits the scope.
+        if (input_expr) {
+            if (auto lifted = TryMaskedLeafLift(*input_expr, vars, opts)) {
+                return std::move(*lifted);
+            }
         }
 
         // Dynamic masking: if the root is (2^m - 1) & g and g contains

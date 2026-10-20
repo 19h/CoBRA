@@ -20,6 +20,7 @@ target_sources(
             AtomSimplifier.cpp
             ExprUtils.cpp
             BitPartitioner.cpp
+            MaskedLeafLift.cpp
             MaskedAtomReconstructor.cpp
             TermRefiner.cpp
             SelfCheck.cpp
