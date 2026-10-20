@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 #include "cobra/core/Result.h"
@@ -8,8 +9,8 @@
 
 namespace cobra {
 
-    Result< SemilinearIR > NormalizeToSemilinear(
-        const Expr &expr, const std::vector< std::string > &vars, uint32_t bitwidth
-    );
+    Result< SemilinearIR > NormalizeToSemilinear(const Expr &expr,
+                                                 const cobra::BudgetVector< std::string > &vars,
+                                                 uint32_t bitwidth);
 
 } // namespace cobra

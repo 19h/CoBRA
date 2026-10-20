@@ -1,4 +1,5 @@
 #include "cobra/core/HybridDecomposer.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/Profile.h"
 #include <algorithm>
@@ -15,10 +16,12 @@ namespace cobra {
 
     namespace {
 
-        uint32_t CountActiveVars(const std::vector< uint64_t > &sig, uint32_t n) {
+        uint32_t CountActiveVars(const cobra::BudgetVector< uint64_t > &sig, uint32_t n) {
             uint32_t count = 0;
             for (uint32_t v = 0; v < n; ++v) {
+                ::cobra::budget::Checkpoint();
                 for (size_t j = 0; j < sig.size(); ++j) {
+                    ::cobra::budget::Checkpoint();
                     const size_t kFlipped = j ^ (1U << v);
                     if (sig[j] != sig[kFlipped]) {
                         ++count;
@@ -31,10 +34,11 @@ namespace cobra {
 
     } // namespace
 
-    std::vector< uint64_t >
-    BuildResidualSig(const std::vector< uint64_t > &sig, uint32_t k, ExtractOp op) {
-        std::vector< uint64_t > r_sig(sig.size());
+    cobra::BudgetVector< uint64_t > BuildResidualSig(const cobra::BudgetVector< uint64_t > &sig,
+                                                     uint32_t k, ExtractOp op) {
+        cobra::BudgetVector< uint64_t > r_sig(sig.size());
         for (size_t i = 0; i < sig.size(); ++i) {
+            ::cobra::budget::Checkpoint();
             const uint64_t kVk = (i >> k) & 1;
             switch (op) {
                 case ExtractOp::kXor:
@@ -48,8 +52,8 @@ namespace cobra {
         return r_sig;
     }
 
-    std::unique_ptr< Expr >
-    ComposeExtraction(ExtractOp op, uint32_t original_k, std::unique_ptr< Expr > r_expr) {
+    std::unique_ptr< Expr > ComposeExtraction(ExtractOp op, uint32_t original_k,
+                                              std::unique_ptr< Expr > r_expr) {
         auto var_k = Expr::Variable(original_k);
         switch (op) {
             case ExtractOp::kXor:
@@ -60,33 +64,31 @@ namespace cobra {
         return Expr::Constant(0);
     }
 
-    std::vector< HybridExtractionCandidate >
-    EnumerateHybridCandidates(const std::vector< uint64_t > &sig, uint32_t num_vars) {
-        std::vector< HybridExtractionCandidate > candidates;
+    cobra::BudgetVector< HybridExtractionCandidate >
+    EnumerateHybridCandidates(const cobra::BudgetVector< uint64_t > &sig, uint32_t num_vars) {
+        cobra::BudgetVector< HybridExtractionCandidate > candidates;
         candidates.reserve(2 * num_vars);
 
         for (uint32_t k = 0; k < num_vars; ++k) {
+            ::cobra::budget::Checkpoint();
             for (auto op : { ExtractOp::kXor, ExtractOp::kAdd }) {
+                ::cobra::budget::Checkpoint();
                 auto r_sig = BuildResidualSig(sig, k, op);
 
                 if (r_sig == sig) { continue; }
 
                 const uint32_t r_active = CountActiveVars(r_sig, num_vars);
-                candidates.push_back(
-                    { .var_k        = k,
-                      .op           = op,
-                      .r_sig        = std::move(r_sig),
-                      .active_count = r_active }
-                );
+                candidates.push_back({ .var_k        = k,
+                                       .op           = op,
+                                       .r_sig        = std::move(r_sig),
+                                       .active_count = r_active });
             }
         }
 
-        std::sort(
-            candidates.begin(), candidates.end(),
-            [](const HybridExtractionCandidate &a, const HybridExtractionCandidate &b) {
-                return a.active_count < b.active_count;
-            }
-        );
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const HybridExtractionCandidate &a, const HybridExtractionCandidate &b) {
+                      return a.active_count < b.active_count;
+                  });
 
         return candidates;
     }

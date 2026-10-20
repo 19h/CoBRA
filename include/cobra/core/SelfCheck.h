@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/SemilinearIR.h"
 #include <string>
@@ -12,9 +13,9 @@ namespace cobra {
         std::string mismatch_detail;
     };
 
-    SelfCheckResult SelfCheckSemilinear(
-        const SemilinearIR &original_ir, const Expr &reconstructed,
-        const std::vector< std::string > &vars, uint32_t bitwidth
-    );
+    SelfCheckResult SelfCheckSemilinear(const SemilinearIR &original_ir,
+                                        const Expr &reconstructed,
+                                        const cobra::BudgetVector< std::string > &vars,
+                                        uint32_t bitwidth);
 
 } // namespace cobra

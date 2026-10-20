@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Evaluator.h"
 #include <cstdint>
@@ -13,8 +14,8 @@ namespace cobra {
 
     struct SplitResult
     {
-        std::vector< uint64_t > and_coeffs;
-        std::vector< uint64_t > mul_coeffs;
+        cobra::BudgetVector< uint64_t > and_coeffs;
+        cobra::BudgetVector< uint64_t > mul_coeffs;
     };
 
     /// Deterministic coefficient splitting.
@@ -35,9 +36,8 @@ namespace cobra {
     ///   - cob.size() == 2^num_vars
     ///   - eval returns results mod 2^bitwidth
     ///   - singleton_at_2 is empty or has size == num_vars
-    SplitResult SplitCoefficients(
-        const std::vector< uint64_t > &cob, const Evaluator &eval, uint32_t num_vars,
-        uint32_t bitwidth, const std::vector< uint64_t > &singleton_at_2 = {}
-    );
+    SplitResult SplitCoefficients(const cobra::BudgetVector< uint64_t > &cob,
+                                  const Evaluator &eval, uint32_t num_vars, uint32_t bitwidth,
+                                  const cobra::BudgetVector< uint64_t > &singleton_at_2 = {});
 
 } // namespace cobra

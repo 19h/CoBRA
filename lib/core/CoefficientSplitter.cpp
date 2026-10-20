@@ -1,5 +1,6 @@
 #include "cobra/core/CoefficientSplitter.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/MathUtils.h"
 #include "cobra/core/Trace.h"
 #include <bit>
@@ -37,16 +38,16 @@ namespace cobra {
         /// When singleton_at_2 is non-empty, singleton submasks (popcount=1)
         /// use the recovered polynomial evaluation S_i(2) instead of the
         /// CoB-linear model 2*and_coeffs[s].
-        uint64_t EvalKnownContribution(
-            const std::vector< uint64_t > &and_coeffs,
-            const std::vector< uint64_t > &mul_coeffs, uint64_t active_mask, uint32_t bitwidth,
-            const std::vector< uint64_t > &singleton_at_2
-        ) {
+        uint64_t EvalKnownContribution(const cobra::BudgetVector< uint64_t > &and_coeffs,
+                                       const cobra::BudgetVector< uint64_t > &mul_coeffs,
+                                       uint64_t active_mask, uint32_t bitwidth,
+                                       const cobra::BudgetVector< uint64_t > &singleton_at_2) {
             const uint64_t kModMask = Bitmask(bitwidth);
             uint64_t g              = and_coeffs[0] & kModMask;
 
             // Enumerate all nonempty submasks of active_mask
             for (uint64_t s = active_mask; s != 0; s = (s - 1) & active_mask) {
+                ::cobra::budget::Checkpoint();
                 const auto kPopcount = static_cast< uint32_t >(std::popcount(s));
                 if (kPopcount == 1 && !singleton_at_2.empty()) {
                     const auto kBitIdx = static_cast< uint32_t >(std::countr_zero(s));
@@ -62,13 +63,11 @@ namespace cobra {
 
     } // anonymous namespace
 
-    SplitResult SplitCoefficients(
-        const std::vector< uint64_t > &cob, const Evaluator &eval, uint32_t num_vars,
-        uint32_t bitwidth, const std::vector< uint64_t > &singleton_at_2
-    ) {
-        COBRA_TRACE(
-            "CoeffSplitter", "SplitCoefficients: vars={} bitwidth={}", num_vars, bitwidth
-        );
+    SplitResult SplitCoefficients(const cobra::BudgetVector< uint64_t > &cob,
+                                  const Evaluator &eval, uint32_t num_vars, uint32_t bitwidth,
+                                  const cobra::BudgetVector< uint64_t > &singleton_at_2) {
+        COBRA_TRACE("CoeffSplitter", "SplitCoefficients: vars={} bitwidth={}", num_vars,
+                    bitwidth);
         assert(bitwidth >= 2);
         const size_t kLen = size_t{ 1 } << num_vars;
         assert(cob.size() == kLen);
@@ -80,13 +79,17 @@ namespace cobra {
         SplitResult result;
         result.and_coeffs.resize(kLen);
         result.mul_coeffs.resize(kLen, 0);
-        for (size_t i = 0; i < kLen; ++i) { result.and_coeffs[i] = cob[i]; }
+        for (size_t i = 0; i < kLen; ++i) {
+            ::cobra::budget::Checkpoint();
+            result.and_coeffs[i] = cob[i];
+        }
 
         // Precompute inverse table: odd_inverses[deg] = (2^{deg-1} - 1)^{-1}
         // mod 2^{bitwidth-1}.  deg ranges over [2, max(num_vars, 2)].
         const uint32_t kMaxDeg = (num_vars < 2) ? 2 : num_vars;
-        std::vector< uint64_t > odd_inverses(kMaxDeg + 1, 0);
+        cobra::BudgetVector< uint64_t > odd_inverses(kMaxDeg + 1, 0);
         for (uint32_t d = 2; d <= kMaxDeg; ++d) {
+            ::cobra::budget::Checkpoint();
             const uint64_t kU = (1ULL << (d - 1)) - 1;
             odd_inverses[d]   = ModInverseOddHalf(kU, bitwidth);
         }
@@ -94,11 +97,13 @@ namespace cobra {
         // Bottom-up by popcount.
         // When singleton_at_2 is provided, skip popcount=1 masks —
         // singleton contributions are modeled externally.
-        std::vector< uint64_t > point(num_vars, 0);
+        cobra::BudgetVector< uint64_t > point(num_vars, 0);
         for (uint32_t k = 1; k <= num_vars; ++k) {
+            ::cobra::budget::Checkpoint();
             if (k == 1 && !singleton_at_2.empty()) { continue; }
 
             for (uint64_t m = 0; m < kLen; ++m) {
+                ::cobra::budget::Checkpoint();
                 if (std::cmp_not_equal(std::popcount(m), k)) { continue; }
                 if (cob[m] == 0) { continue; }
 
@@ -106,13 +111,13 @@ namespace cobra {
 
                 // Build P_m: vars in m = 2, rest = 0
                 for (uint32_t v = 0; v < num_vars; ++v) {
+                    ::cobra::budget::Checkpoint();
                     point[v] = ((m & (1ULL << v)) != 0u) ? 2 : 0;
                 }
 
                 const uint64_t kF = eval(point) & kModMask;
-                const uint64_t kG = EvalKnownContribution(
-                    result.and_coeffs, result.mul_coeffs, m, bitwidth, singleton_at_2
-                );
+                const uint64_t kG = EvalKnownContribution(result.and_coeffs, result.mul_coeffs,
+                                                          m, bitwidth, singleton_at_2);
 
                 const uint64_t kEvalDiff = (kF - kG) & kModMask;
                 if (kEvalDiff == 0) { continue; }
@@ -132,6 +137,7 @@ namespace cobra {
         // Zero singleton masks when externally modeled
         if (!singleton_at_2.empty()) {
             for (uint32_t i = 0; i < num_vars; ++i) {
+                ::cobra::budget::Checkpoint();
                 result.and_coeffs[1ULL << i] = 0;
                 result.mul_coeffs[1ULL << i] = 0;
             }

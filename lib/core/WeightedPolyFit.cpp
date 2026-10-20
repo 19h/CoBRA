@@ -1,5 +1,6 @@
 #include "cobra/core/WeightedPolyFit.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/MathUtils.h"
 #include "cobra/core/MonomialKey.h"
 #include <algorithm>
@@ -29,14 +30,17 @@ namespace cobra {
 
         uint64_t FallingFactorial(uint64_t x, uint8_t n, uint64_t mask) {
             uint64_t result = 1;
-            for (uint8_t i = 0; i < n; ++i) { result = (result * (x - i)) & mask; }
+            for (uint8_t i = 0; i < n; ++i) {
+                ::cobra::budget::Checkpoint();
+                result = (result * (x - i)) & mask;
+            }
             return result;
         }
 
-        std::vector< std::vector< uint8_t > >
+        cobra::BudgetVector< cobra::BudgetVector< uint8_t > >
         EnumerateBasis(uint32_t num_vars, uint8_t max_degree, uint8_t per_var_cap) {
-            std::vector< std::vector< uint8_t > > basis;
-            std::vector< uint8_t > cur(num_vars, 0);
+            cobra::BudgetVector< cobra::BudgetVector< uint8_t > > basis;
+            cobra::BudgetVector< uint8_t > cur(num_vars, 0);
 
             std::function< void(uint32_t, uint32_t) > enumerate = [&](uint32_t dim,
                                                                       uint32_t remaining) {
@@ -46,23 +50,29 @@ namespace cobra {
                 }
                 const auto kLim = std::min(static_cast< uint32_t >(per_var_cap), remaining);
                 for (uint32_t e = 0; e <= kLim; ++e) {
+                    ::cobra::budget::Checkpoint();
                     cur[dim] = static_cast< uint8_t >(e);
                     enumerate(dim + 1, remaining - e);
                 }
             };
             enumerate(0, static_cast< uint32_t >(max_degree));
 
-            std::sort(
-                basis.begin(), basis.end(),
-                [](const std::vector< uint8_t > &a, const std::vector< uint8_t > &b) {
-                    uint32_t da = 0;
-                    uint32_t db = 0;
-                    for (auto e : a) { da += e; }
-                    for (auto e : b) { db += e; }
-                    if (da != db) { return da < db; }
-                    return a < b;
-                }
-            );
+            std::sort(basis.begin(), basis.end(),
+                      [](const cobra::BudgetVector< uint8_t > &a,
+                         const cobra::BudgetVector< uint8_t > &b) {
+                          uint32_t da = 0;
+                          uint32_t db = 0;
+                          for (auto e : a) {
+                              ::cobra::budget::Checkpoint();
+                              da += e;
+                          }
+                          for (auto e : b) {
+                              ::cobra::budget::Checkpoint();
+                              db += e;
+                          }
+                          if (da != db) { return da < db; }
+                          return a < b;
+                      });
 
             return basis;
         }
@@ -70,19 +80,21 @@ namespace cobra {
         // 2-adic forward elimination + consistency check + back-substitution.
         // Returns solved coefficients, or nullopt if rank-deficient or
         // inconsistent.
-        std::optional< std::vector< uint64_t > > Solve2Adic(
-            std::vector< std::vector< uint64_t > > &mat, std::vector< uint64_t > &rhs,
-            size_t num_cols, uint64_t mask, uint32_t bitwidth
-        ) {
+        std::optional< cobra::BudgetVector< uint64_t > >
+        Solve2Adic(cobra::BudgetVector< cobra::BudgetVector< uint64_t > > &mat,
+                   cobra::BudgetVector< uint64_t > &rhs, size_t num_cols, uint64_t mask,
+                   uint32_t bitwidth) {
             const auto kNumRows = mat.size();
-            std::vector< bool > is_pivot(kNumRows, false);
-            std::vector< size_t > pivot_row(num_cols, 0);
-            std::vector< bool > has_pivot(num_cols, false);
+            cobra::BudgetVector< bool > is_pivot(kNumRows, false);
+            cobra::BudgetVector< size_t > pivot_row(num_cols, 0);
+            cobra::BudgetVector< bool > has_pivot(num_cols, false);
 
             for (size_t col = 0; col < num_cols; ++col) {
+                ::cobra::budget::Checkpoint();
                 size_t best_row  = kNumRows;
                 uint32_t best_v2 = bitwidth + 1;
                 for (size_t j = 0; j < kNumRows; ++j) {
+                    ::cobra::budget::Checkpoint();
                     if (is_pivot[j] || mat[j][col] == 0) { continue; }
                     auto v2 = static_cast< uint32_t >(std::countr_zero(mat[j][col]));
                     if (v2 < best_v2) {
@@ -102,9 +114,11 @@ namespace cobra {
                 const uint64_t kPivInv   = ModInverseOdd(mat[best_row][col] >> best_v2, kPrec);
 
                 for (size_t i = 0; i < kNumRows; ++i) {
+                    ::cobra::budget::Checkpoint();
                     if (is_pivot[i] || mat[i][col] == 0) { continue; }
                     const uint64_t kMult = ((mat[i][col] >> best_v2) * kPivInv) & kPrecMask;
                     for (size_t c = 0; c < num_cols; ++c) {
+                        ::cobra::budget::Checkpoint();
                         mat[i][c] = (mat[i][c] - kMult * mat[best_row][c]) & mask;
                     }
                     rhs[i] = (rhs[i] - kMult * rhs[best_row]) & mask;
@@ -112,18 +126,22 @@ namespace cobra {
             }
 
             for (size_t col = 0; col < num_cols; ++col) {
+                ::cobra::budget::Checkpoint();
                 if (!has_pivot[col]) { return std::nullopt; }
             }
             for (size_t i = 0; i < kNumRows; ++i) {
+                ::cobra::budget::Checkpoint();
                 if (!is_pivot[i] && rhs[i] != 0) { return std::nullopt; }
             }
 
             // Back-substitution
-            std::vector< uint64_t > h_raw(num_cols, 0);
+            cobra::BudgetVector< uint64_t > h_raw(num_cols, 0);
             for (size_t col_idx = num_cols; col_idx-- > 0;) {
+                ::cobra::budget::Checkpoint();
                 const size_t kRow = pivot_row[col_idx];
                 uint64_t adj_rhs  = rhs[kRow];
                 for (size_t c = col_idx + 1; c < num_cols; ++c) {
+                    ::cobra::budget::Checkpoint();
                     adj_rhs = (adj_rhs - h_raw[c] * mat[kRow][c]) & mask;
                 }
                 if (mat[kRow][col_idx] == 0) { return std::nullopt; }
@@ -142,11 +160,10 @@ namespace cobra {
             return h_raw;
         }
 
-        std::optional< WeightedFitResult > TrySolve(
-            const Evaluator &target, const WeightFn &weight,
-            const std::vector< uint32_t > &support_vars, uint32_t total_num_vars,
-            uint32_t bitwidth, uint8_t max_degree, uint8_t grid_deg
-        ) {
+        std::optional< WeightedFitResult >
+        TrySolve(const Evaluator &target, const WeightFn &weight,
+                 const cobra::BudgetVector< uint32_t > &support_vars, uint32_t total_num_vars,
+                 uint32_t bitwidth, uint8_t max_degree, uint8_t grid_deg) {
             const auto kK        = static_cast< uint32_t >(support_vars.size());
             const uint64_t kMask = Bitmask(bitwidth);
             const auto kPerVarCap =
@@ -157,32 +174,38 @@ namespace cobra {
 
             const auto kGridBase = static_cast< size_t >(grid_deg) + 1;
             size_t num_rows      = 1;
-            for (uint32_t i = 0; i < kK; ++i) { num_rows *= kGridBase; }
+            for (uint32_t i = 0; i < kK; ++i) {
+                ::cobra::budget::Checkpoint();
+                num_rows = budget::CheckedProduct(num_rows, kGridBase);
+            }
 
-            std::vector< std::vector< uint64_t > > mat(
-                num_rows, std::vector< uint64_t >(kNumCols, 0)
-            );
-            std::vector< uint64_t > rhs(num_rows, 0);
-            std::vector< uint64_t > full_point(total_num_vars, 0);
-            std::vector< uint64_t > local_point(kK, 0);
+            cobra::BudgetVector< cobra::BudgetVector< uint64_t > > mat(
+                num_rows, cobra::BudgetVector< uint64_t >(kNumCols, 0));
+            cobra::BudgetVector< uint64_t > rhs(num_rows, 0);
+            cobra::BudgetVector< uint64_t > full_point(total_num_vars, 0);
+            cobra::BudgetVector< uint64_t > local_point(kK, 0);
 
             // Precompute falling factorials over the grid. The matrix build
             // below would otherwise recompute FallingFactorial(coord, exp) once
             // per (row, col, dim) for only kGridBase x (kPerVarCap+1) distinct
             // (coord, exp) pairs.
-            std::vector< std::vector< uint64_t > > falling(
-                kGridBase, std::vector< uint64_t >(static_cast< size_t >(kPerVarCap) + 1, 0)
-            );
+            cobra::BudgetVector< cobra::BudgetVector< uint64_t > > falling(
+                kGridBase,
+                cobra::BudgetVector< uint64_t >(static_cast< size_t >(kPerVarCap) + 1, 0));
             for (size_t coord = 0; coord < kGridBase; ++coord) {
+                ::cobra::budget::Checkpoint();
                 for (uint32_t e = 0; e <= kPerVarCap; ++e) {
+                    ::cobra::budget::Checkpoint();
                     falling[coord][e] =
                         FallingFactorial(coord, static_cast< uint8_t >(e), kMask);
                 }
             }
 
             for (size_t row = 0; row < num_rows; ++row) {
+                ::cobra::budget::Checkpoint();
                 size_t tmp = row;
                 for (uint32_t i = 0; i < kK; ++i) {
+                    ::cobra::budget::Checkpoint();
                     local_point[i]               = tmp % kGridBase;
                     full_point[support_vars[i]]  = tmp % kGridBase;
                     tmp                         /= kGridBase;
@@ -190,13 +213,18 @@ namespace cobra {
                 rhs[row]             = target(full_point) & kMask;
                 const uint64_t kWVal = weight(local_point, bitwidth);
                 for (size_t col = 0; col < kNumCols; ++col) {
+                    ::cobra::budget::Checkpoint();
                     uint64_t phi = 1;
                     for (uint32_t i = 0; i < kK; ++i) {
+                        ::cobra::budget::Checkpoint();
                         phi = (phi * falling[local_point[i]][basis_exps[col][i]]) & kMask;
                     }
                     mat[row][col] = (kWVal * phi) & kMask;
                 }
-                for (uint32_t i = 0; i < kK; ++i) { full_point[support_vars[i]] = 0; }
+                for (uint32_t i = 0; i < kK; ++i) {
+                    ::cobra::budget::Checkpoint();
+                    full_point[support_vars[i]] = 0;
+                }
             }
 
             auto h_raw = Solve2Adic(mat, rhs, kNumCols, kMask, bitwidth);
@@ -210,16 +238,21 @@ namespace cobra {
             std::array< uint8_t, kMaxPolyVars > exps{};
 
             for (size_t col = 0; col < kNumCols; ++col) {
+                ::cobra::budget::Checkpoint();
                 uint64_t h = (*h_raw)[col] & kMask;
                 if (h == 0) { continue; }
                 exps.fill(0);
                 uint32_t total_deg = 0;
                 for (uint32_t i = 0; i < kK; ++i) {
+                    ::cobra::budget::Checkpoint();
                     exps[support_vars[i]]  = basis_exps[col][i];
                     total_deg             += basis_exps[col][i];
                 }
                 uint32_t q = 0;
-                for (uint32_t i = 0; i < kK; ++i) { q += TwosInFactorial(basis_exps[col][i]); }
+                for (uint32_t i = 0; i < kK; ++i) {
+                    ::cobra::budget::Checkpoint();
+                    q += TwosInFactorial(basis_exps[col][i]);
+                }
                 if (q >= bitwidth) { continue; }
                 if (q > 0) { h &= Bitmask(bitwidth - q); }
                 if (h == 0) { continue; }
@@ -236,11 +269,11 @@ namespace cobra {
 
     } // namespace
 
-    SolverResult< WeightedFitResult > RecoverWeightedPoly(
-        const Evaluator &target, const WeightFn &weight,
-        const std::vector< uint32_t > &support_vars, uint32_t total_num_vars, uint32_t bitwidth,
-        uint8_t max_degree, uint8_t grid_degree
-    ) {
+    SolverResult< WeightedFitResult >
+    RecoverWeightedPoly(const Evaluator &target, const WeightFn &weight,
+                        const cobra::BudgetVector< uint32_t > &support_vars,
+                        uint32_t total_num_vars, uint32_t bitwidth, uint8_t max_degree,
+                        uint8_t grid_degree) {
         if (support_vars.empty()) {
             ReasonDetail reason{
                 .top = { .code = { ReasonCategory::kGuardFailed, ReasonDomain::kWeightedPolyFit,
@@ -266,6 +299,7 @@ namespace cobra {
             return SolverResult< WeightedFitResult >::Inapplicable(std::move(reason));
         }
         for (auto idx : support_vars) {
+            ::cobra::budget::Checkpoint();
             if (idx >= total_num_vars) {
                 ReasonDetail reason{
                     .top = { .code    = { ReasonCategory::kGuardFailed,
@@ -277,9 +311,8 @@ namespace cobra {
             }
         }
 
-        auto fit = TrySolve(
-            target, weight, support_vars, total_num_vars, bitwidth, max_degree, grid_degree
-        );
+        auto fit = TrySolve(target, weight, support_vars, total_num_vars, bitwidth, max_degree,
+                            grid_degree);
         if (!fit.has_value()) {
             ReasonDetail reason{
                 .top = { .code    = { ReasonCategory::kSearchExhausted,

@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 #include "cobra/core/PassContract.h"
@@ -16,9 +17,9 @@ namespace cobra::internal {
 
     std::unique_ptr< Expr > LowerNotOverArith(std::unique_ptr< Expr > e, uint32_t bitwidth);
 
-    CheckResult VerifyInOriginalSpace(
-        const Evaluator &eval, const std::vector< std::string > &all_vars,
-        const std::vector< std::string > &real_vars, const Expr &reduced_expr, uint32_t bitwidth
-    );
+    CheckResult VerifyInOriginalSpace(const Evaluator &eval,
+                                      const cobra::BudgetVector< std::string > &all_vars,
+                                      const cobra::BudgetVector< std::string > &real_vars,
+                                      const Expr &reduced_expr, uint32_t bitwidth);
 
 } // namespace cobra::internal

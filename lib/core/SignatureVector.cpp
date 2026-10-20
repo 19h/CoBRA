@@ -1,5 +1,6 @@
 #include "cobra/core/SignatureVector.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include <cassert>
 #include <cstdint>
 #include <vector>
@@ -15,8 +16,12 @@ namespace cobra {
     }
 
     // NOLINTNEXTLINE(readability-identifier-naming)
-    std::vector< uint64_t > SignatureVector::FromValues(std::vector< uint64_t > values) const {
-        for (auto &v : values) { v &= mask_; }
+    cobra::BudgetVector< uint64_t >
+    SignatureVector::FromValues(cobra::BudgetVector< uint64_t > values) const {
+        for (auto &v : values) {
+            ::cobra::budget::Checkpoint();
+            v &= mask_;
+        }
         return values;
     }
 

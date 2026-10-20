@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include <cstdint>
 #include <vector>
@@ -17,7 +18,8 @@ namespace cobra {
         size_t Length() const { return 1ULL << num_vars_; }
 
         // Construct from pre-computed values (CLI parser evaluates the expression)
-        std::vector< uint64_t > FromValues(std::vector< uint64_t > values) const;
+        cobra::BudgetVector< uint64_t >
+        FromValues(cobra::BudgetVector< uint64_t > values) const;
 
       private:
         uint32_t num_vars_;

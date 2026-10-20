@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 
@@ -68,13 +69,13 @@ namespace cobra {
     {
         ReasonCode code;
         std::string message;
-        std::vector< DiagField > fields;
+        cobra::BudgetVector< DiagField > fields;
     };
 
     struct ReasonDetail
     {
         ReasonFrame top;
-        std::vector< ReasonFrame > causes;
+        cobra::BudgetVector< ReasonFrame > causes;
     };
 
     // ---------------------------------------------------------------
@@ -175,10 +176,9 @@ namespace cobra {
       public:
         PassOutcome() = delete;
 
-        static PassOutcome Success(
-            std::unique_ptr< Expr > expr, std::vector< std::string > real_vars,
-            VerificationState verification
-        );
+        static PassOutcome Success(std::unique_ptr< Expr > expr,
+                                   cobra::BudgetVector< std::string > real_vars,
+                                   VerificationState verification);
 
         static PassOutcome Blocked(ReasonDetail reason);
 
@@ -189,13 +189,13 @@ namespace cobra {
         const Expr &GetExpr() const;
         std::unique_ptr< Expr > TakeExpr();
 
-        const std::vector< std::string > &RealVars() const;
+        const cobra::BudgetVector< std::string > &RealVars() const;
         VerificationState Verification() const;
 
         const ReasonDetail &Reason() const;
 
-        const std::vector< uint64_t > &SigVector() const;
-        void SetSigVector(std::vector< uint64_t > sv);
+        const cobra::BudgetVector< uint64_t > &SigVector() const;
+        void SetSigVector(cobra::BudgetVector< uint64_t > sv);
 
         const std::optional< DecompositionMeta > &DecompositionMetadata() const;
         void SetDecompositionMeta(DecompositionMeta meta);
@@ -205,10 +205,10 @@ namespace cobra {
 
         OutcomeKind kind_;
         std::unique_ptr< Expr > expr_;
-        std::vector< std::string > real_vars_;
+        cobra::BudgetVector< std::string > real_vars_;
         VerificationState verification_ = VerificationState::kUnverified;
         std::optional< ReasonDetail > reason_;
-        std::vector< uint64_t > sig_vector_;
+        cobra::BudgetVector< uint64_t > sig_vector_;
         std::optional< DecompositionMeta > decomposition_meta_;
     };
 

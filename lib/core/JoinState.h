@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "CompetitionGroup.h"
 #include "ContinuationTypes.h"
@@ -28,16 +29,16 @@ namespace cobra {
         // Hash of the target Mul for replacement in the full AST.
         size_t target_hash = 0;
         ExprCost baseline_cost;
-        std::vector< std::string > vars;
+        cobra::BudgetVector< std::string > vars;
         std::optional< GroupId > parent_group_id;
         bool has_solve_ctx = false;
-        std::vector< std::string > solve_ctx_vars;
+        cobra::BudgetVector< std::string > solve_ctx_vars;
         std::optional< Evaluator > solve_ctx_evaluator;
-        std::vector< uint64_t > solve_ctx_input_sig;
+        cobra::BudgetVector< uint64_t > solve_ctx_input_sig;
         uint32_t bitwidth     = 64;
         uint32_t parent_depth = 0;
         uint32_t rewrite_gen  = 0;
-        std::vector< PassId > parent_history;
+        cobra::BudgetVector< PassId > parent_history;
     };
 
     struct ProductJoinState
@@ -48,16 +49,16 @@ namespace cobra {
         bool y_resolved = false;
         std::unique_ptr< Expr > original_expr;
         ExprCost baseline_cost;
-        std::vector< std::string > vars;
+        cobra::BudgetVector< std::string > vars;
         std::optional< GroupId > parent_group_id;
         bool has_solve_ctx = false;
-        std::vector< std::string > solve_ctx_vars;
+        cobra::BudgetVector< std::string > solve_ctx_vars;
         std::optional< Evaluator > solve_ctx_evaluator;
-        std::vector< uint64_t > solve_ctx_input_sig;
+        cobra::BudgetVector< uint64_t > solve_ctx_input_sig;
         uint32_t bitwidth     = 64;
         uint32_t parent_depth = 0;
         uint32_t rewrite_gen  = 0;
-        std::vector< PassId > parent_history;
+        cobra::BudgetVector< PassId > parent_history;
         // Full AST for replacement splicing.
         std::unique_ptr< Expr > full_ast;
         size_t target_hash = 0;
@@ -66,16 +67,13 @@ namespace cobra {
     using JoinState = std::variant< OperandJoinState, ProductJoinState >;
 
     // Allocates a new join and returns its id.
-    JoinId CreateJoin(
-        absl::flat_hash_map< JoinId, JoinState > &joins, JoinId &next_id, JoinState state
-    );
+    JoinId CreateJoin(cobra::BudgetFlatMap< JoinId, JoinState > &joins, JoinId &next_id,
+                      JoinState state);
 
     // Walk the AST, replacing the first node whose hash matches
     // target_hash with the replacement. Returns the rebuilt AST.
     // The replacement is consumed on match; left intact otherwise.
-    std::unique_ptr< Expr > ReplaceByHash(
-        std::unique_ptr< Expr > root, size_t target_hash, std::unique_ptr< Expr > &replacement,
-        bool &replaced
-    );
+    std::unique_ptr< Expr > ReplaceByHash(std::unique_ptr< Expr > root, size_t target_hash,
+                                          std::unique_ptr< Expr > &replacement, bool &replaced);
 
 } // namespace cobra

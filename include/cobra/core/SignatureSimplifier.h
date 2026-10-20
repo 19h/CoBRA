@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 #include "cobra/core/ExprCost.h"
@@ -18,16 +19,16 @@ namespace cobra {
         std::unique_ptr< Expr > expr;
         ExprCost cost;
         VerificationState verification = VerificationState::kUnverified;
-        std::vector< std::string > real_vars;
+        cobra::BudgetVector< std::string > real_vars;
     };
 
     struct SignatureContext
     {
-        std::vector< std::string > vars;
-        std::vector< uint32_t > original_indices;
+        cobra::BudgetVector< std::string > vars;
+        cobra::BudgetVector< uint32_t > original_indices;
         std::optional< Evaluator > eval;
     };
 
-    bool IsBooleanValued(const std::vector< uint64_t > &sig);
+    bool IsBooleanValued(const cobra::BudgetVector< uint64_t > &sig);
 
 } // namespace cobra

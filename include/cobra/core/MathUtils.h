@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/BitWidth.h"
 #include <bit>
@@ -18,7 +19,10 @@ namespace cobra {
     // Concrete values: 8→10, 16→18, 32→34, 64→66.
     constexpr uint32_t DegreeCap(uint32_t bitwidth) {
         uint32_t d = 0;
-        while (TwosInFactorial(d) < bitwidth) { ++d; }
+        while (TwosInFactorial(d) < bitwidth) {
+            ::cobra::budget::Checkpoint();
+            ++d;
+        }
         return d;
     }
 
@@ -29,8 +33,12 @@ namespace cobra {
         const uint64_t kMask = Bitmask(bitwidth);
         uint64_t result      = 1;
         for (uint32_t i = 1; i <= k; ++i) {
+            ::cobra::budget::Checkpoint();
             uint32_t x = i;
-            while ((x & 1) == 0) { x >>= 1; }
+            while ((x & 1) == 0) {
+                ::cobra::budget::Checkpoint();
+                x >>= 1;
+            }
             result = (result * x) & kMask;
         }
         return result;
@@ -47,21 +55,27 @@ namespace cobra {
         assert(x & 1);
         const uint64_t kModMask = Bitmask(bits);
         uint64_t inv            = ((3 * x) ^ 2) & kModMask;
-        for (uint32_t b = 5; b < bits; b *= 2) { inv = (inv * (2 - (x * inv))) & kModMask; }
+        for (uint32_t b = 5; b < bits; b *= 2) {
+            ::cobra::budget::Checkpoint();
+            inv = (inv * (2 - (x * inv))) & kModMask;
+        }
         return inv & kModMask;
     }
 
     // Stirling numbers of the second kind S(n,k) mod 2^bitwidth.
     // Returns a (max_degree+1) x (max_degree+1) table.
     // Recurrence: S(n,k) = k*S(n-1,k) + S(n-1,k-1).
-    inline std::vector< std::vector< uint64_t > >
+    inline cobra::BudgetVector< cobra::BudgetVector< uint64_t > >
     BuildStirlingSecondKind(uint8_t max_degree, uint32_t bitwidth) {
         const uint64_t kMask = Bitmask(bitwidth);
         const auto kN        = static_cast< size_t >(max_degree) + 1;
-        std::vector< std::vector< uint64_t > > s(kN, std::vector< uint64_t >(kN, 0));
+        cobra::BudgetVector< cobra::BudgetVector< uint64_t > > s(
+            kN, cobra::BudgetVector< uint64_t >(kN, 0));
         s[0][0] = 1;
         for (size_t n = 1; n < kN; ++n) {
+            ::cobra::budget::Checkpoint();
             for (size_t k = 1; k <= n; ++k) {
+                ::cobra::budget::Checkpoint();
                 s[n][k] = ((k * s[n - 1][k]) + s[n - 1][k - 1]) & kMask;
             }
         }
@@ -71,14 +85,17 @@ namespace cobra {
     // Signed Stirling numbers of the first kind s(n,k) mod 2^bitwidth.
     // Returns a (max_degree+1) x (max_degree+1) table.
     // Recurrence: s(n,k) = -(n-1)*s(n-1,k) + s(n-1,k-1).
-    inline std::vector< std::vector< uint64_t > >
+    inline cobra::BudgetVector< cobra::BudgetVector< uint64_t > >
     BuildStirlingFirstKind(uint8_t max_degree, uint32_t bitwidth) {
         const uint64_t kMask = Bitmask(bitwidth);
         const auto kN        = static_cast< size_t >(max_degree) + 1;
-        std::vector< std::vector< uint64_t > > s(kN, std::vector< uint64_t >(kN, 0));
+        cobra::BudgetVector< cobra::BudgetVector< uint64_t > > s(
+            kN, cobra::BudgetVector< uint64_t >(kN, 0));
         s[0][0] = 1;
         for (size_t n = 1; n < kN; ++n) {
+            ::cobra::budget::Checkpoint();
             for (size_t k = 1; k <= n; ++k) {
+                ::cobra::budget::Checkpoint();
                 uint64_t neg_nm1 = (0 - (n - 1)) & kMask;
                 s[n][k]          = ((neg_nm1 * s[n - 1][k]) + s[n - 1][k - 1]) & kMask;
             }

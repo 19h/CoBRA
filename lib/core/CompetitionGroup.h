@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "ContinuationTypes.h"
 #include "cobra/core/Expr.h"
@@ -25,10 +26,10 @@ namespace cobra {
         std::unique_ptr< Expr > expr;
         ExprCost cost;
         VerificationState verification = VerificationState::kUnverified;
-        std::vector< std::string > real_vars;
+        cobra::BudgetVector< std::string > real_vars;
         PassId source_pass;
         bool needs_original_space_verification = true;
-        std::vector< uint64_t > sig_vector;
+        cobra::BudgetVector< uint64_t > sig_vector;
     };
 
     struct CompetitionGroup
@@ -37,7 +38,7 @@ namespace cobra {
         std::optional< CandidateRecord > best;
         std::optional< ExprCost > baseline_cost;
         std::optional< ContinuationData > continuation;
-        std::vector< ReasonDetail > technique_failures;
+        cobra::BudgetVector< ReasonDetail > technique_failures;
     };
 
     // ---------------------------------------------------------------
@@ -45,31 +46,26 @@ namespace cobra {
     // ---------------------------------------------------------------
 
     // Allocates a new group with open_handles = 1 and returns its id.
-    GroupId CreateGroup(
-        absl::flat_hash_map< GroupId, CompetitionGroup > &groups, GroupId &next_id,
-        std::optional< ExprCost > baseline_cost = std::nullopt
-    );
+    GroupId CreateGroup(cobra::BudgetFlatMap< GroupId, CompetitionGroup > &groups,
+                        GroupId &next_id,
+                        std::optional< ExprCost > baseline_cost = std::nullopt);
 
     // Submits a candidate to a group. Accepted only if it beats
     // the baseline and any current best.
-    bool SubmitCandidate(
-        absl::flat_hash_map< GroupId, CompetitionGroup > &groups, GroupId group_id,
-        CandidateRecord record
-    );
+    bool SubmitCandidate(cobra::BudgetFlatMap< GroupId, CompetitionGroup > &groups,
+                         GroupId group_id, CandidateRecord record);
 
     // Increments a group's open_handles.  Returns false if the
     // group has already been resolved and erased.
-    bool
-    AcquireHandle(absl::flat_hash_map< GroupId, CompetitionGroup > &groups, GroupId group_id);
+    bool AcquireHandle(cobra::BudgetFlatMap< GroupId, CompetitionGroup > &groups,
+                       GroupId group_id);
 
     // Returns true if the group already holds a verified candidate
     // whose cost does not exceed max_weighted_size.  Used to
     // short-circuit expensive decomposition passes when the
     // algebraic path (CoB, pattern match) already found a compact
     // answer that decomposition is unlikely to improve.
-    bool HasVerifiedCandidate(
-        const absl::flat_hash_map< GroupId, CompetitionGroup > &groups, GroupId group_id,
-        uint32_t max_weighted_size = UINT32_MAX
-    );
+    bool HasVerifiedCandidate(const cobra::BudgetFlatMap< GroupId, CompetitionGroup > &groups,
+                              GroupId group_id, uint32_t max_weighted_size = UINT32_MAX);
 
 } // namespace cobra

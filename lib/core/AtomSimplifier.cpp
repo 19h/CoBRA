@@ -1,5 +1,6 @@
 #include "cobra/core/AtomSimplifier.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/ExprUtils.h"
 #include "cobra/core/SemilinearIR.h"
@@ -25,10 +26,8 @@ namespace cobra {
             return Expr::BitwiseNot(std::move(child));
         }
 
-        std::unique_ptr< Expr > TryFoldBinary(
-            Expr::Kind kind, std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs,
-            uint32_t bitwidth
-        ) {
+        std::unique_ptr< Expr > TryFoldBinary(Expr::Kind kind, std::unique_ptr< Expr > lhs,
+                                              std::unique_ptr< Expr > rhs, uint32_t bitwidth) {
             const bool kLc          = IsConst(*lhs);
             const bool kRc          = IsConst(*rhs);
             const uint64_t kAllOnes = Bitmask(bitwidth);
@@ -67,6 +66,7 @@ namespace cobra {
             if (a.kind == Expr::Kind::kVariable) { return a.var_index == b.var_index; }
             if (a.children.size() != b.children.size()) { return false; }
             for (size_t i = 0; i < a.children.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (!ExprsEqual(*a.children[i], *b.children[i])) { return false; }
             }
             return true;
@@ -78,9 +78,8 @@ namespace cobra {
         /// full-width inputs.
         bool HasConstantOrShr(const Expr &e) {
             if (e.kind == Expr::Kind::kConstant || e.kind == Expr::Kind::kShr) { return true; }
-            return std::ranges::any_of(e.children, [](const auto &c) {
-                return HasConstantOrShr(*c);
-            });
+            return std::ranges::any_of(e.children,
+                                       [](const auto &c) { return HasConstantOrShr(*c); });
         }
 
     } // namespace
@@ -92,7 +91,10 @@ namespace cobra {
         }
 
         // Bottom-up: simplify children first
-        for (auto &child : atom->children) { child = SimplifyAtom(std::move(child), bitwidth); }
+        for (auto &child : atom->children) {
+            ::cobra::budget::Checkpoint();
+            child = SimplifyAtom(std::move(child), bitwidth);
+        }
 
         // Shr identity: x >> 0 -> x
         if (atom->kind == Expr::Kind::kShr && atom->constant_val == 0) {
@@ -115,9 +117,8 @@ namespace cobra {
                 auto lhs = NegateBitwiseChild(std::move(inner->children[0]));
                 auto rhs = NegateBitwiseChild(std::move(inner->children[1]));
                 if (inner->kind == Expr::Kind::kAnd) {
-                    return SimplifyAtom(
-                        Expr::BitwiseOr(std::move(lhs), std::move(rhs)), bitwidth
-                    );
+                    return SimplifyAtom(Expr::BitwiseOr(std::move(lhs), std::move(rhs)),
+                                        bitwidth);
                 }
                 return SimplifyAtom(Expr::BitwiseAnd(std::move(lhs), std::move(rhs)), bitwidth);
             }
@@ -137,9 +138,8 @@ namespace cobra {
 
         // Binary bitwise identity folds
         if (atom->children.size() == 2) {
-            return TryFoldBinary(
-                atom->kind, std::move(atom->children[0]), std::move(atom->children[1]), bitwidth
-            );
+            return TryFoldBinary(atom->kind, std::move(atom->children[0]),
+                                 std::move(atom->children[1]), bitwidth);
         }
 
         return atom;
@@ -151,21 +151,22 @@ namespace cobra {
         const uint64_t kMask = (ir.bitwidth >= 64) ? UINT64_MAX : (1ULL << ir.bitwidth) - 1;
 
         // Merge like atoms: accumulate coefficients by atom_id
-        std::unordered_map< AtomId, uint64_t > merged;
+        cobra::BudgetMap< AtomId, uint64_t > merged;
         for (const auto &term : ir.terms) {
+            ::cobra::budget::Checkpoint();
             merged[term.atom_id] = (merged[term.atom_id] + term.coeff) & kMask;
         }
 
         // Rebuild terms, dropping zeros, sorted by atom_id
-        std::vector< WeightedAtom > result;
+        cobra::BudgetVector< WeightedAtom > result;
         for (const auto &[aid, coeff] : merged) {
+            ::cobra::budget::Checkpoint();
             if (coeff != 0) { result.push_back({ .coeff = coeff, .atom_id = aid }); }
         }
 
         std::sort(
             result.begin(), result.end(),
-            [](const WeightedAtom &a, const WeightedAtom &b) { return a.atom_id < b.atom_id; }
-        );
+            [](const WeightedAtom &a, const WeightedAtom &b) { return a.atom_id < b.atom_id; });
 
         ir.terms = std::move(result);
 
@@ -173,10 +174,12 @@ namespace cobra {
         // complementary truth tables with equal coefficients, absorb
         // c * mask_all into the constant and remove both terms.
         {
-            std::vector< bool > removed(ir.terms.size(), false);
+            cobra::BudgetVector< bool > removed(ir.terms.size(), false);
             for (size_t i = 0; i < ir.terms.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (removed[i]) { continue; }
                 for (size_t j = i + 1; j < ir.terms.size(); ++j) {
+                    ::cobra::budget::Checkpoint();
                     if (removed[j]) { continue; }
                     if (ir.terms[i].coeff != ir.terms[j].coeff) { continue; }
 
@@ -200,6 +203,7 @@ namespace cobra {
 
                     bool complementary = true;
                     for (size_t k = 0; k < ki.truth_table.size(); ++k) {
+                        ::cobra::budget::Checkpoint();
                         if (ki.truth_table[k] != ((~kj.truth_table[k]) & kMask)) {
                             complementary = false;
                             break;
@@ -214,8 +218,9 @@ namespace cobra {
                 }
             }
 
-            std::vector< WeightedAtom > kept;
+            cobra::BudgetVector< WeightedAtom > kept;
             for (size_t i = 0; i < ir.terms.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (!removed[i]) { kept.push_back(ir.terms[i]); }
             }
             ir.terms = std::move(kept);
@@ -223,6 +228,7 @@ namespace cobra {
 
         // Simplify each atom's expression tree (algebraic identities)
         for (auto &info : ir.atom_table) {
+            ::cobra::budget::Checkpoint();
             if (info.original_subtree) {
                 info.original_subtree =
                     SimplifyAtom(std::move(info.original_subtree), ir.bitwidth);

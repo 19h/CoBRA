@@ -1,5 +1,6 @@
 #include "cobra/core/SelfCheck.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/SemilinearIR.h"
 #include "cobra/core/SemilinearNormalizer.h"
@@ -15,16 +16,18 @@ namespace cobra {
 
     namespace {
 
-        using CoeffMap = std::unordered_map< AtomKey, uint64_t >;
+        using CoeffMap = cobra::BudgetMap< AtomKey, uint64_t >;
 
         CoeffMap BuildCoeffMap(const SemilinearIR &ir, uint64_t mask) {
             CoeffMap result;
             for (const auto &term : ir.terms) {
+                ::cobra::budget::Checkpoint();
                 const AtomKey &key = ir.atom_table[term.atom_id].key;
                 result[key]        = (result[key] + term.coeff) & mask;
             }
             // Remove zero-coefficient entries
             for (auto it = result.begin(); it != result.end();) {
+                ::cobra::budget::Checkpoint();
                 if (it->second == 0) {
                     it = result.erase(it);
                 } else {
@@ -36,13 +39,12 @@ namespace cobra {
 
     } // namespace
 
-    SelfCheckResult SelfCheckSemilinear(
-        const SemilinearIR &original_ir, const Expr &reconstructed,
-        const std::vector< std::string > &vars, uint32_t bitwidth
-    ) {
-        COBRA_TRACE(
-            "SelfCheck", "SelfCheckSemilinear: vars={} bitwidth={}", vars.size(), bitwidth
-        );
+    SelfCheckResult SelfCheckSemilinear(const SemilinearIR &original_ir,
+                                        const Expr &reconstructed,
+                                        const cobra::BudgetVector< std::string > &vars,
+                                        uint32_t bitwidth) {
+        COBRA_TRACE("SelfCheck", "SelfCheckSemilinear: vars={} bitwidth={}", vars.size(),
+                    bitwidth);
         auto re_result = NormalizeToSemilinear(reconstructed, vars, bitwidth);
         if (!re_result.has_value()) {
             return { .passed = false,
@@ -71,6 +73,7 @@ namespace cobra {
         }
 
         for (const auto &[key, coeff] : kOrigMap) {
+            ::cobra::budget::Checkpoint();
             auto it = re_map.find(key);
             if (it == re_map.end()) {
                 return { .passed = false,

@@ -1,5 +1,6 @@
 #include "cobra/core/GhostResidualSolver.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/GhostBasis.h"
 #include "cobra/core/MathUtils.h"
 #include "cobra/core/PassContract.h"
@@ -27,9 +28,7 @@ namespace cobra {
         // Shared by IsBooleanNullResidual and SolveGhostResidual.
         // Mixed parity gives varied 2-adic valuations.
         struct ProbePoint
-        {
-            std::array< uint64_t, kMaxResidualSupport > values{};
-        };
+        { std::array< uint64_t, kMaxResidualSupport > values{}; };
 
         constexpr int kNumProbes = 8;
 
@@ -37,11 +36,13 @@ namespace cobra {
             const auto kArity = static_cast< uint32_t >(combo.size());
             int i             = static_cast< int >(kArity) - 1;
             while (i >= 0) {
+                ::cobra::budget::Checkpoint();
                 combo[static_cast< size_t >(i)]++;
                 if (combo[static_cast< size_t >(i)]
                     <= support_size - kArity + static_cast< uint32_t >(i))
                 {
                     for (uint32_t j = static_cast< uint32_t >(i) + 1; j < kArity; ++j) {
+                        ::cobra::budget::Checkpoint();
                         combo[j] = combo[j - 1] + 1;
                     }
                     return true;
@@ -51,9 +52,8 @@ namespace cobra {
             return false;
         }
 
-        void GenerateProbeBank(
-            std::array< ProbePoint, kNumProbes > &bank, uint32_t num_vars, uint32_t bitwidth
-        ) {
+        void GenerateProbeBank(std::array< ProbePoint, kNumProbes > &bank, uint32_t num_vars,
+                               uint32_t bitwidth) {
             const uint64_t kMask                        = Bitmask(bitwidth);
             // Deterministic seed values — mixed parity (even and odd).
             constexpr std::array< uint64_t, 48 > kSeeds = {
@@ -62,7 +62,9 @@ namespace cobra {
                 9, 12, 17, 20, 25, 30, 35, 40, 47, 56, 63, 70, 79, 86, 95, 102,
             };
             for (size_t p = 0; p < kNumProbes; ++p) {
+                ::cobra::budget::Checkpoint();
                 for (uint32_t v = 0; v < num_vars && v < kMaxResidualSupport; ++v) {
+                    ::cobra::budget::Checkpoint();
                     bank[p].values[v] = kSeeds[(p * kMaxResidualSupport) + v] & kMask;
                 }
             }
@@ -70,14 +72,13 @@ namespace cobra {
 
     } // namespace
 
-    bool IsBooleanNullResidual(
-        const Evaluator &residual_eval, const std::vector< uint32_t > &support,
-        uint32_t num_vars, uint32_t bitwidth, const std::vector< uint64_t > &boolean_sig
-    ) {
+    bool IsBooleanNullResidual(const Evaluator &residual_eval,
+                               const cobra::BudgetVector< uint32_t > &support,
+                               uint32_t num_vars, uint32_t bitwidth,
+                               const cobra::BudgetVector< uint64_t > &boolean_sig) {
         // Condition 1: all boolean-signature entries are zero
-        if (!std::all_of(
-                boolean_sig.begin(), boolean_sig.end(), [](uint64_t v) { return v == 0; }
-            ))
+        if (!std::all_of(boolean_sig.begin(), boolean_sig.end(),
+                         [](uint64_t v) { return v == 0; }))
         {
             return false;
         }
@@ -91,22 +92,27 @@ namespace cobra {
         GenerateProbeBank(bank, kSupportSize, bitwidth);
 
         const uint64_t kMask = Bitmask(bitwidth);
-        std::vector< uint64_t > point(num_vars, 0);
+        cobra::BudgetVector< uint64_t > point(num_vars, 0);
         for (int p = 0; p < kNumProbes; ++p) {
+            ::cobra::budget::Checkpoint();
             for (uint32_t v = 0; v < kSupportSize; ++v) {
+                ::cobra::budget::Checkpoint();
                 point[support[v]] = bank[static_cast< size_t >(p)].values[v];
             }
             uint64_t val = residual_eval(point) & kMask;
-            for (uint32_t v = 0; v < kSupportSize; ++v) { point[support[v]] = 0; }
+            for (uint32_t v = 0; v < kSupportSize; ++v) {
+                ::cobra::budget::Checkpoint();
+                point[support[v]] = 0;
+            }
             if (val != 0) { return true; }
         }
         return false;
     }
 
-    SolverResult< GhostSolveResult > SolveGhostResidual(
-        const Evaluator &residual_eval, const std::vector< uint32_t > &support,
-        uint32_t num_vars, uint32_t bitwidth
-    ) {
+    SolverResult< GhostSolveResult >
+    SolveGhostResidual(const Evaluator &residual_eval,
+                       const cobra::BudgetVector< uint32_t > &support, uint32_t num_vars,
+                       uint32_t bitwidth) {
         const uint64_t kMask    = Bitmask(bitwidth);
         const auto kSupportSize = static_cast< uint32_t >(support.size());
         const auto &basis       = GetGhostBasis();
@@ -116,21 +122,30 @@ namespace cobra {
 
         // Evaluate residual at each probe point (in full original space)
         std::array< uint64_t, kNumProbes > r_vals{};
-        std::vector< uint64_t > full(num_vars, 0);
+        cobra::BudgetVector< uint64_t > full(num_vars, 0);
         for (int p = 0; p < kNumProbes; ++p) {
+            ::cobra::budget::Checkpoint();
             for (uint32_t v = 0; v < kSupportSize; ++v) {
+                ::cobra::budget::Checkpoint();
                 full[support[v]] = bank[static_cast< size_t >(p)].values[v];
             }
             r_vals[static_cast< size_t >(p)] = residual_eval(full) & kMask;
-            for (uint32_t v = 0; v < kSupportSize; ++v) { full[support[v]] = 0; }
+            for (uint32_t v = 0; v < kSupportSize; ++v) {
+                ::cobra::budget::Checkpoint();
+                full[support[v]] = 0;
+            }
         }
 
         for (const auto &prim : basis) {
+            ::cobra::budget::Checkpoint();
             if (prim.arity > kSupportSize || prim.arity > kMaxResidualSupport) { continue; }
 
             // Enumerate strictly increasing index combinations
             std::array< uint32_t, kMaxResidualSupport > combo{};
-            for (uint8_t i = 0; i < prim.arity; ++i) { combo[i] = i; }
+            for (uint8_t i = 0; i < prim.arity; ++i) {
+                ::cobra::budget::Checkpoint();
+                combo[i] = i;
+            }
             auto combo_span = std::span< uint32_t >{ combo.data(), prim.arity };
 
             do {
@@ -138,12 +153,13 @@ namespace cobra {
                 std::array< uint64_t, kNumProbes > g_vals{};
                 std::array< uint64_t, kMaxResidualSupport > args{};
                 for (int p = 0; p < kNumProbes; ++p) {
+                    ::cobra::budget::Checkpoint();
                     for (uint8_t a = 0; a < prim.arity; ++a) {
+                        ::cobra::budget::Checkpoint();
                         args[a] = bank[static_cast< size_t >(p)].values[combo[a]];
                     }
                     g_vals[static_cast< size_t >(p)] = prim.eval(
-                        std::span< const uint64_t >{ args.data(), prim.arity }, bitwidth
-                    );
+                        std::span< const uint64_t >{ args.data(), prim.arity }, bitwidth);
                 }
 
                 // 2-adic coefficient inference
@@ -153,6 +169,7 @@ namespace cobra {
                 bool tuple_reject = false;
 
                 for (int p = 0; p < kNumProbes; ++p) {
+                    ::cobra::budget::Checkpoint();
                     auto pidx = static_cast< size_t >(p);
                     if (g_vals[pidx] == 0) { continue; }
                     auto t = static_cast< uint32_t >(std::countr_zero(g_vals[pidx]));
@@ -179,6 +196,7 @@ namespace cobra {
                 // Cross-check against all probes
                 bool cross_ok = true;
                 for (int p = 0; p < kNumProbes; ++p) {
+                    ::cobra::budget::Checkpoint();
                     auto pidx         = static_cast< size_t >(p);
                     uint64_t expected = (best_c * g_vals[pidx]) & kMask;
                     if (expected != r_vals[pidx]) {
@@ -190,7 +208,10 @@ namespace cobra {
 
                 // Build the expression: c * ghost(var_indices)
                 std::array< uint32_t, kMaxResidualSupport > var_indices{};
-                for (uint8_t a = 0; a < prim.arity; ++a) { var_indices[a] = support[combo[a]]; }
+                for (uint8_t a = 0; a < prim.arity; ++a) {
+                    ::cobra::budget::Checkpoint();
+                    var_indices[a] = support[combo[a]];
+                }
                 auto ghost_expr =
                     prim.build(std::span< const uint32_t >{ var_indices.data(), prim.arity });
 
@@ -225,38 +246,45 @@ namespace cobra {
     }
 
     SolverResult< GhostSolveResult > SolveFactoredGhostResidual(
-        const Evaluator &residual_eval, const std::vector< uint32_t > &support,
-        uint32_t num_vars, uint32_t bitwidth, uint8_t max_degree, uint8_t grid_degree
-    ) {
+        const Evaluator &residual_eval, const cobra::BudgetVector< uint32_t > &support,
+        uint32_t num_vars, uint32_t bitwidth, uint8_t max_degree, uint8_t grid_degree) {
         const auto kSupportSize = static_cast< uint32_t >(support.size());
         const auto &basis       = GetGhostBasis();
 
         for (const auto &prim : basis) {
+            ::cobra::budget::Checkpoint();
             if (prim.arity > kSupportSize || prim.arity > kMaxResidualSupport) { continue; }
 
             // Enumerate strictly increasing index combinations
             std::array< uint32_t, kMaxResidualSupport > combo{};
-            for (uint8_t i = 0; i < prim.arity; ++i) { combo[i] = i; }
+            for (uint8_t i = 0; i < prim.arity; ++i) {
+                ::cobra::budget::Checkpoint();
+                combo[i] = i;
+            }
             auto combo_span = std::span< uint32_t >{ combo.data(), prim.arity };
 
             do {
                 // Map support-local combo to original-space variable indices
                 std::array< uint32_t, kMaxResidualSupport > var_indices{};
-                for (uint8_t a = 0; a < prim.arity; ++a) { var_indices[a] = support[combo[a]]; }
+                for (uint8_t a = 0; a < prim.arity; ++a) {
+                    ::cobra::budget::Checkpoint();
+                    var_indices[a] = support[combo[a]];
+                }
 
                 // Build weight function from ghost primitive + tuple
-                WeightFn weight =
-                    [&prim, combo](std::span< const uint64_t > args, uint32_t bw) -> uint64_t {
+                WeightFn weight = [&prim, combo](std::span< const uint64_t > args,
+                                                 uint32_t bw) -> uint64_t {
                     std::array< uint64_t, kMaxResidualSupport > ghost_args{};
-                    for (uint8_t a = 0; a < prim.arity; ++a) { ghost_args[a] = args[combo[a]]; }
+                    for (uint8_t a = 0; a < prim.arity; ++a) {
+                        ::cobra::budget::Checkpoint();
+                        ghost_args[a] = args[combo[a]];
+                    }
                     return prim.eval(
-                        std::span< const uint64_t >{ ghost_args.data(), prim.arity }, bw
-                    );
+                        std::span< const uint64_t >{ ghost_args.data(), prim.arity }, bw);
                 };
 
-                auto fit = RecoverWeightedPoly(
-                    residual_eval, weight, support, num_vars, bitwidth, max_degree, grid_degree
-                );
+                auto fit = RecoverWeightedPoly(residual_eval, weight, support, num_vars,
+                                               bitwidth, max_degree, grid_degree);
                 if (!fit.Succeeded()) { continue; }
 
                 auto q_expr = BuildPolyExpr(fit.Payload().poly);

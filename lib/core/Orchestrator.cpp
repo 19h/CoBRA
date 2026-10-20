@@ -5,6 +5,7 @@
 #include "SimplifierInternal.h"
 #include "cobra/core/AuxVarEliminator.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/DynamicMask.h"
 #include "cobra/core/ExprCost.h"
 #include "cobra/core/ExprUtils.h"
@@ -49,8 +50,7 @@ namespace cobra {
                     return StateKind::kCandidateExpr;
                 }
             },
-            data
-        );
+            data);
     }
 
     StateFingerprint ComputeFingerprint(const WorkItem &item, uint32_t bitwidth) {
@@ -65,12 +65,10 @@ namespace cobra {
         // or evaluator (residual-origin children).
         auto fold_control = [&](size_t h) -> size_t {
             h = detail::hash_combine(
-                h, std::hash< uint32_t >{}(item.group_id.value_or(UINT32_MAX))
-            );
+                h, std::hash< uint32_t >{}(item.group_id.value_or(UINT32_MAX)));
             h = detail::hash_combine(h, std::hash< uint8_t >{}(item.signature_recursion_depth));
-            h = detail::hash_combine(
-                h, std::hash< bool >{}(item.evaluator_override.has_value())
-            );
+            h = detail::hash_combine(h,
+                                     std::hash< bool >{}(item.evaluator_override.has_value()));
             return h;
         };
 
@@ -81,23 +79,24 @@ namespace cobra {
                     size_t h = std::hash< Expr >{}(*payload.expr);
                     if (payload.solve_ctx.has_value()) {
                         for (const auto &v : payload.solve_ctx->vars) {
+                            ::cobra::budget::Checkpoint();
                             h = detail::hash_combine(h, std::hash< std::string >{}(v));
                         }
                         h = detail::hash_combine(
-                            h, std::hash< bool >{}(payload.solve_ctx->evaluator.has_value())
-                        );
+                            h, std::hash< bool >{}(payload.solve_ctx->evaluator.has_value()));
                         for (uint64_t s : payload.solve_ctx->input_sig) {
+                            ::cobra::budget::Checkpoint();
                             h = detail::hash_combine(h, std::hash< uint64_t >{}(s));
                         }
                     }
                     h = detail::hash_combine(
-                        h, std::hash< uint32_t >{}(item.group_id.value_or(UINT32_MAX))
-                    );
+                        h, std::hash< uint32_t >{}(item.group_id.value_or(UINT32_MAX)));
                     fp.payload_hash = h;
                     fp.vars         = {};
                 } else if constexpr (std::is_same_v< T, SignatureStatePayload >) {
                     size_t h = std::hash< size_t >{}(payload.ctx.sig.size());
                     for (uint64_t v : payload.ctx.sig) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(h, std::hash< uint64_t >{}(v));
                     }
                     fp.payload_hash = fold_control(h);
@@ -105,9 +104,11 @@ namespace cobra {
                 } else if constexpr (std::is_same_v< T, SignatureCoeffStatePayload >) {
                     size_t h = std::hash< size_t >{}(payload.ctx.sig.size());
                     for (uint64_t v : payload.ctx.sig) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(h, std::hash< uint64_t >{}(v));
                     }
                     for (uint64_t c : payload.coeffs) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(h, std::hash< uint64_t >{}(c));
                     }
                     fp.payload_hash = fold_control(h);
@@ -116,13 +117,14 @@ namespace cobra {
                     size_t h = std::hash< Expr >{}(*payload.core_expr);
                     h        = detail::hash_combine(
                         h,
-                        std::hash< uint8_t >{}(static_cast< uint8_t >(payload.extractor_kind))
-                    );
+                        std::hash< uint8_t >{}(static_cast< uint8_t >(payload.extractor_kind)));
                     h = detail::hash_combine(h, std::hash< uint8_t >{}(payload.degree_used));
                     for (const auto &v : payload.target.vars) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(h, std::hash< std::string >{}(v));
                     }
                     for (uint32_t r : payload.target.remap_support) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(h, std::hash< uint32_t >{}(r));
                     }
                     fp.payload_hash = h;
@@ -135,29 +137,30 @@ namespace cobra {
                         h = detail::hash_combine(h, std::hash< uint64_t >{}(0xDEAD));
                     }
                     for (uint64_t v : payload.remainder_sig) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(h, std::hash< uint64_t >{}(v));
                     }
                     for (uint32_t s : payload.remainder_support) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(h, std::hash< uint32_t >{}(s));
                     }
                     h = detail::hash_combine(h, std::hash< bool >{}(payload.is_boolean_null));
                     h = detail::hash_combine(h, std::hash< uint8_t >{}(payload.degree_floor));
                     for (const auto &v : payload.target.vars) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(h, std::hash< std::string >{}(v));
                     }
                     for (uint32_t r : payload.target.remap_support) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(h, std::hash< uint32_t >{}(r));
                     }
                     h = detail::hash_combine(
-                        h, std::hash< uint32_t >{}(item.group_id.value_or(UINT32_MAX))
-                    );
+                        h, std::hash< uint32_t >{}(item.group_id.value_or(UINT32_MAX)));
                     fp.payload_hash = h;
                     fp.vars         = {};
-                } else if constexpr (
-                    std::is_same_v< T, NormalizedSemilinearPayload >
-                    || std::is_same_v< T, CheckedSemilinearPayload >
-                    || std::is_same_v< T, RewrittenSemilinearPayload >
-                )
+                } else if constexpr (std::is_same_v< T, NormalizedSemilinearPayload >
+                                     || std::is_same_v< T, CheckedSemilinearPayload >
+                                     || std::is_same_v< T, RewrittenSemilinearPayload >)
                 {
                     auto key        = BuildSemilinearFingerprintKey(payload.ctx.ir);
                     fp.payload_hash = std::hash< SemilinearFingerprintKey >{}(key);
@@ -165,24 +168,25 @@ namespace cobra {
                 } else if constexpr (std::is_same_v< T, LiftedSkeletonPayload >) {
                     size_t h = std::hash< Expr >{}(*payload.outer_expr);
                     for (const auto &v : payload.outer_ctx.vars) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(h, std::hash< std::string >{}(v));
                     }
                     for (uint64_t s : payload.outer_ctx.input_sig) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(h, std::hash< uint64_t >{}(s));
                     }
                     for (const auto &v : payload.original_ctx.vars) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(h, std::hash< std::string >{}(v));
                     }
                     h = detail::hash_combine(
-                        h, std::hash< bool >{}(payload.original_ctx.evaluator.has_value())
-                    );
+                        h, std::hash< bool >{}(payload.original_ctx.evaluator.has_value()));
                     h = detail::hash_combine(
-                        h, std::hash< uint32_t >{}(payload.original_var_count)
-                    );
+                        h, std::hash< uint32_t >{}(payload.original_var_count));
                     for (const auto &b : payload.bindings) {
+                        ::cobra::budget::Checkpoint();
                         h = detail::hash_combine(
-                            h, std::hash< uint8_t >{}(static_cast< uint8_t >(b.kind))
-                        );
+                            h, std::hash< uint8_t >{}(static_cast< uint8_t >(b.kind)));
                         h = detail::hash_combine(h, std::hash< uint32_t >{}(b.outer_var_index));
                         h = detail::hash_combine(h, std::hash< uint64_t >{}(b.structural_hash));
                     }
@@ -195,14 +199,12 @@ namespace cobra {
                     // CandidatePayload
                     size_t h = detail::hash_combine(
                         std::hash< Expr >{}(*payload.expr),
-                        std::hash< bool >{}(payload.needs_original_space_verification)
-                    );
+                        std::hash< bool >{}(payload.needs_original_space_verification));
                     fp.payload_hash = h;
                     fp.vars         = payload.real_vars;
                 }
             },
-            item.payload
-        );
+            item.payload);
 
         return fp;
     }
@@ -213,16 +215,15 @@ namespace cobra {
         key.bitwidth = ir.bitwidth;
         key.terms.reserve(ir.terms.size());
         for (const auto &t : ir.terms) {
+            ::cobra::budget::Checkpoint();
             const auto &info = ir.atom_table[t.atom_id];
-            key.terms.push_back(
-                {
-                    .coeff           = t.coeff,
-                    .support         = info.key.support,
-                    .truth_table     = info.key.truth_table,
-                    .structural_hash = info.structural_hash,
-                    .provenance      = info.provenance,
-                }
-            );
+            key.terms.push_back({
+                .coeff           = t.coeff,
+                .support         = info.key.support,
+                .truth_table     = info.key.truth_table,
+                .structural_hash = info.structural_hash,
+                .provenance      = info.provenance,
+            });
         }
         std::sort(key.terms.begin(), key.terms.end(), [](const auto &a, const auto &b) {
             if (a.coeff != b.coeff) { return a.coeff < b.coeff; }
@@ -281,20 +282,29 @@ std::hash< cobra::StateFingerprint >::operator()(const cobra::StateFingerprint &
     h        = hash_combine(h, std::hash< int >{}(static_cast< int >(fp.kind)));
     h        = hash_combine(h, std::hash< uint32_t >{}(fp.bitwidth));
     h        = hash_combine(h, std::hash< int >{}(static_cast< int >(fp.provenance)));
-    for (const auto &v : fp.vars) { h = hash_combine(h, std::hash< std::string >{}(v)); }
+    for (const auto &v : fp.vars) {
+        ::cobra::budget::Checkpoint();
+        h = hash_combine(h, std::hash< std::string >{}(v));
+    }
     return h;
 }
 
 size_t std::hash< cobra::SemilinearFingerprintKey >::operator()(
-    const cobra::SemilinearFingerprintKey &key
-) const {
+    const cobra::SemilinearFingerprintKey &key) const {
     using cobra::detail::hash_combine;
     size_t h = std::hash< uint64_t >{}(key.constant);
     h        = hash_combine(h, std::hash< uint32_t >{}(key.bitwidth));
     for (const auto &t : key.terms) {
+        ::cobra::budget::Checkpoint();
         h = hash_combine(h, std::hash< uint64_t >{}(t.coeff));
-        for (auto s : t.support) { h = hash_combine(h, std::hash< uint32_t >{}(s)); }
-        for (auto v : t.truth_table) { h = hash_combine(h, std::hash< uint64_t >{}(v)); }
+        for (auto s : t.support) {
+            ::cobra::budget::Checkpoint();
+            h = hash_combine(h, std::hash< uint32_t >{}(s));
+        }
+        for (auto v : t.truth_table) {
+            ::cobra::budget::Checkpoint();
+            h = hash_combine(h, std::hash< uint64_t >{}(v));
+        }
         h = hash_combine(h, std::hash< uint64_t >{}(t.structural_hash));
         h = hash_combine(h, std::hash< int >{}(static_cast< int >(t.provenance)));
     }
@@ -321,6 +331,7 @@ namespace cobra {
     WorkItem Worklist::Pop() {
         size_t best = 0;
         for (size_t i = 1; i < items_.size(); ++i) {
+            ::cobra::budget::Checkpoint();
             if (IsBetterPriority(items_[i], items_[best])) { best = i; }
         }
         WorkItem result = std::move(items_[best]);
@@ -406,10 +417,10 @@ namespace cobra {
 
     } // namespace
 
-    std::optional< PassId > SelectNextPass(
-        const WorkItem &item, const OrchestratorPolicy &policy, uint32_t verifications_used,
-        const PassAttemptCache &cache
-    ) {
+    std::optional< PassId > SelectNextPass(const WorkItem &item,
+                                           const OrchestratorPolicy &policy,
+                                           uint32_t verifications_used,
+                                           const PassAttemptCache &cache) {
         auto kind = GetStateKind(item.payload);
         auto fp   = ComputeFingerprint(item, 64);
 
@@ -438,6 +449,7 @@ namespace cobra {
             };
 
             for (const auto &entry : kSignatureStatePasses) {
+                ::cobra::budget::Checkpoint();
                 if ((item.attempted_mask & Bit(entry.id)) != 0) { continue; }
                 if (cache.HasAttempted(fp, entry.id)) { continue; }
                 return entry.id;
@@ -457,6 +469,7 @@ namespace cobra {
             };
 
             for (const auto &entry : kSignatureCoeffPasses) {
+                ::cobra::budget::Checkpoint();
                 if ((item.attempted_mask & Bit(entry.id)) != 0) { continue; }
                 if (cache.HasAttempted(fp, entry.id)) { continue; }
                 return entry.id;
@@ -491,6 +504,7 @@ namespace cobra {
             }
 
             for (size_t i = 0; i < table_size; ++i) {
+                ::cobra::budget::Checkpoint();
                 const auto &entry = table[i];
                 if ((item.attempted_mask & Bit(entry.id)) != 0) { continue; }
                 if (cache.HasAttempted(fp, entry.id)) { continue; }
@@ -547,11 +561,9 @@ namespace cobra {
                 && item.features.classification->semantic == SemanticClass::kSemilinear)
             {
                 eligible_semilinear = true;
-            } else if (
-                item.features.provenance == Provenance::kRewritten
-                && item.features.classification
-                && item.features.classification->semantic == SemanticClass::kSemilinear
-            )
+            } else if (item.features.provenance == Provenance::kRewritten
+                       && item.features.classification
+                       && item.features.classification->semantic == SemanticClass::kSemilinear)
             {
                 if (auto *ast = std::get_if< AstPayload >(&item.payload)) {
                     if (ast->solve_ctx.has_value()) { eligible_semilinear = true; }
@@ -581,6 +593,7 @@ namespace cobra {
 
         // 11. Exploration candidates → iterate the pass table
         for (const auto &entry : kFoldedAstPasses) {
+            ::cobra::budget::Checkpoint();
             if ((item.attempted_mask & Bit(entry.id)) != 0) { continue; }
             if ((item.attempted_mask & entry.prereq_mask) != entry.prereq_mask) { continue; }
             if (entry.is_structural_transform && item.rewrite_gen >= policy.max_rewrite_gen) {
@@ -645,8 +658,7 @@ namespace cobra {
 
                 auto check = internal::VerifyInOriginalSpace(
                     *ctx.evaluator, ctx.original_vars, fast_candidate->real_vars,
-                    *fast_candidate->expr, ctx.bitwidth
-                );
+                    *fast_candidate->expr, ctx.bitwidth);
                 if (!check.passed) { return std::nullopt; }
 
                 fast_candidate->verification = VerificationState::kVerified;
@@ -658,20 +670,19 @@ namespace cobra {
             meta.verification = fast_candidate->verification;
 
             return OrchestratorResult{
-                .outcome = PassOutcome::Success(
-                    std::move(fast_candidate->expr), fast_candidate->real_vars,
-                    fast_candidate->verification
-                ),
+                .outcome      = PassOutcome::Success(std::move(fast_candidate->expr),
+                                                     fast_candidate->real_vars,
+                                                     fast_candidate->verification),
                 .metadata     = std::move(meta),
                 .run_metadata = ctx.run_metadata,
             };
         }
 
         // Seed the worklist for the no-AST path (signature only).
-        Result< std::optional< OrchestratorResult > > SeedNoAst(
-            const std::vector< uint64_t > &sig, const std::vector< std::string > &vars,
-            OrchestratorContext &ctx, Worklist &worklist
-        ) {
+        Result< std::optional< OrchestratorResult > >
+        SeedNoAst(const cobra::BudgetVector< uint64_t > &sig,
+                  const cobra::BudgetVector< std::string > &vars, OrchestratorContext &ctx,
+                  Worklist &worklist) {
             const auto num_vars = static_cast< uint32_t >(vars.size());
 
             // Constant pruning: accept a constant match only when
@@ -705,14 +716,11 @@ namespace cobra {
                     meta.verification = fw_verified ? VerificationState::kVerified
                                                     : VerificationState::kUnverified;
 
-                    return Ok(
-                        std::optional< OrchestratorResult >(OrchestratorResult{
-                            .outcome =
-                                PassOutcome::Success(std::move(*pm), {}, meta.verification),
-                            .metadata     = std::move(meta),
-                            .run_metadata = ctx.run_metadata,
-                        })
-                    );
+                    return Ok(std::optional< OrchestratorResult >(OrchestratorResult{
+                        .outcome  = PassOutcome::Success(std::move(*pm), {}, meta.verification),
+                        .metadata = std::move(meta),
+                        .run_metadata = ctx.run_metadata,
+                    }));
                 }
             }
 
@@ -724,8 +732,7 @@ namespace cobra {
                 return Err< std::optional< OrchestratorResult > >(
                     CobraError::kTooManyVariables,
                     "Variable count after elimination (" + std::to_string(real_var_count)
-                        + ") exceeds max_vars (" + std::to_string(ctx.opts.max_vars) + ")"
-                );
+                        + ") exceeds max_vars (" + std::to_string(ctx.opts.max_vars) + ")");
             }
 
             auto original_indices = BuildVarSupport(vars, elim.real_vars);
@@ -838,11 +845,10 @@ namespace cobra {
             return Ok(std::optional< OrchestratorResult >(std::nullopt));
         }
 
-        SimplifyOutcome ToSimplifyOutcome(
-            OrchestratorResult result, const Expr *original_expr,
-            const OrchestratorTelemetry &telemetry, uint32_t bitwidth,
-            const std::optional< ExprCost > &input_cost
-        ) {
+        SimplifyOutcome ToSimplifyOutcome(OrchestratorResult result, const Expr *original_expr,
+                                          const OrchestratorTelemetry &telemetry,
+                                          uint32_t bitwidth,
+                                          const std::optional< ExprCost > &input_cost) {
             SimplifyOutcome outcome;
 
             if (result.outcome.Succeeded()) {
@@ -925,10 +931,9 @@ namespace cobra {
     // the 16-var default opts.max_vars policy.
     inline constexpr uint32_t kMaxInputVars = 24;
 
-    Result< SimplifyOutcome > Simplify(
-        const std::vector< uint64_t > &sig, const std::vector< std::string > &vars,
-        const Expr *input_expr, const Options &opts
-    ) {
+    Result< SimplifyOutcome > Simplify(const cobra::BudgetVector< uint64_t > &sig,
+                                       const cobra::BudgetVector< std::string > &vars,
+                                       const Expr *input_expr, const Options &opts) {
         COBRA_ZONE_N("Simplify");
         COBRA_ZONE_VALUE(static_cast< int64_t >(vars.size()));
 
@@ -945,8 +950,7 @@ namespace cobra {
                 "Input variable count (" + std::to_string(vars.size())
                     + ") exceeds kMaxInputVars (" + std::to_string(kMaxInputVars)
                     + "); a 2^vars.size() signature would exceed memory bounds. "
-                      "Reduce vars or pre-eliminate aux variables before calling Simplify."
-            );
+                      "Reduce vars or pre-eliminate aux variables before calling Simplify.");
         }
 
         // Reject malformed bitwidth at the public API boundary. bitwidth=0
@@ -954,10 +958,9 @@ namespace cobra {
         // output to 0; bitwidth>64 has no meaningful interpretation in a
         // 64-bit modular ring and triggers shift UB downstream.
         if (opts.bitwidth == 0 || opts.bitwidth > 64) {
-            return Err< SimplifyOutcome >(
-                CobraError::kInvalidArgument,
-                "bitwidth must be in [1, 64]; got " + std::to_string(opts.bitwidth)
-            );
+            return Err< SimplifyOutcome >(CobraError::kInvalidArgument,
+                                          "bitwidth must be in [1, 64]; got "
+                                              + std::to_string(opts.bitwidth));
         }
 
         // Dynamic masking: if the root is (2^m - 1) & g and g contains
@@ -973,8 +976,7 @@ namespace cobra {
                 auto inner      = CloneExpr(*mask->inner);
                 uint32_t eff_bw = mask->effective_width;
                 auto inner_sig  = EvaluateBooleanSignature(
-                    *inner, static_cast< uint32_t >(vars.size()), eff_bw
-                );
+                    *inner, static_cast< uint32_t >(vars.size()), eff_bw);
                 Options inner_opts   = opts;
                 inner_opts.bitwidth  = eff_bw;
                 // Clear so the recursive Simplify builds a fresh
@@ -984,19 +986,16 @@ namespace cobra {
                 inner_opts.evaluator = Evaluator{};
                 auto result          = Simplify(inner_sig, vars, inner.get(), inner_opts);
                 if (result.has_value() && result->kind == SimplifyOutcome::Kind::kSimplified) {
-                    auto wrapped = Expr::BitwiseAnd(
-                        std::move(result->expr), Expr::Constant(Bitmask(eff_bw))
-                    );
-                    auto eval  = Evaluator::FromExpr(*input_expr, opts.bitwidth);
-                    auto check = internal::VerifyInOriginalSpace(
-                        eval, vars, result->real_vars, *wrapped, opts.bitwidth
-                    );
+                    auto wrapped = Expr::BitwiseAnd(std::move(result->expr),
+                                                    Expr::Constant(Bitmask(eff_bw)));
+                    auto eval    = Evaluator::FromExpr(*input_expr, opts.bitwidth);
+                    auto check = internal::VerifyInOriginalSpace(eval, vars, result->real_vars,
+                                                                 *wrapped, opts.bitwidth);
                     if (check.passed) {
                         result->expr       = std::move(wrapped);
                         result->sig_vector = EvaluateBooleanSignature(
                             *result->expr, static_cast< uint32_t >(result->real_vars.size()),
-                            opts.bitwidth
-                        );
+                            opts.bitwidth);
                         result->verified = true;
                         return result;
                     }
@@ -1015,8 +1014,7 @@ namespace cobra {
             .original_vars = vars,
             .evaluator     = effective_opts.evaluator
                 ? std::optional< Evaluator >(
-                      effective_opts.evaluator.WithTrace(EvaluatorTraceKind::kRoot)
-                  )
+                      effective_opts.evaluator.WithTrace(EvaluatorTraceKind::kRoot))
                 : std::nullopt,
             .bitwidth      = opts.bitwidth,
             .run_metadata  = {},
@@ -1038,26 +1036,25 @@ namespace cobra {
             auto seed_result = SeedNoAst(sig, vars, context, worklist);
             if (!seed_result.has_value()) { return std::unexpected(seed_result.error()); }
             if (seed_result.value().has_value()) {
-                return Ok(ToSimplifyOutcome(
-                    std::move(*seed_result.value()), input_expr, telemetry, context.bitwidth,
-                    input_cost
-                ));
+                return Ok(ToSimplifyOutcome(std::move(*seed_result.value()), input_expr,
+                                            telemetry, context.bitwidth, input_cost));
             }
         } else {
             auto seed_result = SeedWithAst(*input_expr, context, worklist);
             if (!seed_result.has_value()) { return std::unexpected(seed_result.error()); }
             if (seed_result.value().has_value()) {
-                return Ok(ToSimplifyOutcome(
-                    std::move(*seed_result.value()), input_expr, telemetry, context.bitwidth,
-                    input_cost
-                ));
+                return Ok(ToSimplifyOutcome(std::move(*seed_result.value()), input_expr,
+                                            telemetry, context.bitwidth, input_cost));
             }
         }
 
         // Build registry lookup map
         const auto &registry = GetPassRegistry();
-        absl::flat_hash_map< PassId, const PassDescriptor * > registry_map;
-        for (const auto &desc : registry) { registry_map[desc.id] = &desc; }
+        cobra::BudgetFlatMap< PassId, const PassDescriptor * > registry_map;
+        for (const auto &desc : registry) {
+            ::cobra::budget::Checkpoint();
+            registry_map[desc.id] = &desc;
+        }
         PassAttemptCache cache;
         uint32_t expansions    = 0;
         uint32_t verifications = 0;
@@ -1078,6 +1075,7 @@ namespace cobra {
 
         // Main loop
         while (!worklist.Empty() && expansions < policy.max_expansions) {
+            ::cobra::budget::Checkpoint();
             auto item = worklist.Pop();
             ++expansions;
             telemetry.total_expansions  = expansions;
@@ -1125,6 +1123,7 @@ namespace cobra {
                     // Stamp transform_produced_candidate if any rewrite
                     // pass is in this candidate's lineage.
                     for (auto h : item.history) {
+                        ::cobra::budget::Checkpoint();
                         if (h == PassId::kOperandSimplify
                             || h == PassId::kProductIdentityCollapse
                             || h == PassId::kXorLowering)
@@ -1137,18 +1136,16 @@ namespace cobra {
                     // Grouped candidates: submit into owning group
                     // so that the group's continuation can recombine.
                     if (item.group_id.has_value()) {
-                        SubmitCandidate(
-                            context.competition_groups, *item.group_id,
-                            CandidateRecord{
-                                .expr                              = std::move(normalized_expr),
-                                .cost                              = normalized_cost,
-                                .verification                      = item.metadata.verification,
-                                .real_vars                         = cand->real_vars,
-                                .source_pass                       = cand->producing_pass,
-                                .needs_original_space_verification = false,
-                                .sig_vector                        = item.metadata.sig_vector,
-                            }
-                        );
+                        SubmitCandidate(context.competition_groups, *item.group_id,
+                                        CandidateRecord{
+                                            .expr         = std::move(normalized_expr),
+                                            .cost         = normalized_cost,
+                                            .verification = item.metadata.verification,
+                                            .real_vars    = cand->real_vars,
+                                            .source_pass  = cand->producing_pass,
+                                            .needs_original_space_verification = false,
+                                            .sig_vector = item.metadata.sig_vector,
+                                        });
                         auto resolved =
                             ReleaseHandle(context.competition_groups, *item.group_id);
                         if (resolved.has_value()) { worklist.Push(std::move(*resolved)); }
@@ -1159,15 +1156,13 @@ namespace cobra {
                         static_cast< uint32_t >(worklist.HighWaterMark());
                     return Ok(ToSimplifyOutcome(
                         OrchestratorResult{
-                            .outcome = PassOutcome::Success(
-                                std::move(normalized_expr), cand->real_vars,
-                                item.metadata.verification
-                            ),
+                            .outcome      = PassOutcome::Success(std::move(normalized_expr),
+                                                                 cand->real_vars,
+                                                                 item.metadata.verification),
                             .metadata     = std::move(item.metadata),
                             .run_metadata = context.run_metadata,
                         },
-                        input_expr, telemetry, context.bitwidth, input_cost
-                    ));
+                        input_expr, telemetry, context.bitwidth, input_cost));
                 }
             }
 
@@ -1184,11 +1179,10 @@ namespace cobra {
             // Compute pre-attempt fingerprint, record attempt
             auto fp              = ComputeFingerprint(item, context.bitwidth);
             item.attempted_mask |= Bit(*pass_id);
-            COBRA_TRACE(
-                "Orchestrator", "pass={} kind={} depth={} mask={:#x}",
-                static_cast< int >(*pass_id), static_cast< int >(GetStateKind(item.payload)),
-                item.depth, item.attempted_mask
-            );
+            COBRA_TRACE("Orchestrator", "pass={} kind={} depth={} mask={:#x}",
+                        static_cast< int >(*pass_id),
+                        static_cast< int >(GetStateKind(item.payload)), item.depth,
+                        item.attempted_mask);
 
             // Run the pass
             auto it = registry_map.find(*pass_id);
@@ -1207,11 +1201,9 @@ namespace cobra {
             cache.Record(fp, *pass_id);
 
             auto &pr = result.value();
-            COBRA_TRACE(
-                "Orchestrator", "  → decision={} children={} disp={}",
-                static_cast< int >(pr.decision), pr.next.size(),
-                static_cast< int >(pr.disposition)
-            );
+            COBRA_TRACE("Orchestrator", "  → decision={} children={} disp={}",
+                        static_cast< int >(pr.decision), pr.next.size(),
+                        static_cast< int >(pr.disposition));
             if (pr.decision == PassDecision::kAdvance
                 || pr.decision == PassDecision::kSolvedCandidate)
             {
@@ -1226,6 +1218,7 @@ namespace cobra {
                     policy.max_expansions += policy.max_expansions / 2;
                 }
                 for (auto &next : pr.next) {
+                    ::cobra::budget::Checkpoint();
                     next.depth = item.depth + 1;
                     next.history.push_back(*pass_id);
                     worklist.Push(std::move(next));
@@ -1282,6 +1275,7 @@ namespace cobra {
                     && pr.reason.top.code.category == ReasonCategory::kVerifyFailed)
                 {
                     for (auto h : item.history) {
+                        ::cobra::budget::Checkpoint();
                         if (h == PassId::kXorLowering) {
                             item.metadata.structural_transform_terminal =
                                 TransformTerminalSignal{ PassId::kXorLowering,
@@ -1296,6 +1290,7 @@ namespace cobra {
                 if (IsDecompositionFamilyPass(*pass_id)) {
                     item.metadata.decomposition_causes.push_back(pr.reason.top);
                     for (const auto &c : pr.reason.causes) {
+                        ::cobra::budget::Checkpoint();
                         item.metadata.decomposition_causes.push_back(c);
                     }
                 }
@@ -1379,7 +1374,10 @@ namespace cobra {
         {
             const auto &sf = *context.run_metadata.semilinear_failure;
             final_meta.cause_chain.push_back(sf.top);
-            for (const auto &c : sf.causes) { final_meta.cause_chain.push_back(c); }
+            for (const auto &c : sf.causes) {
+                ::cobra::budget::Checkpoint();
+                final_meta.cause_chain.push_back(c);
+            }
         }
         // Fallback: collect cause chain from exhaustion reason
         if (final_meta.cause_chain.empty() && !exhaustion_reason.causes.empty()) {
@@ -1404,9 +1402,8 @@ namespace cobra {
                 && IsBetter(ComputeCost(*xor_peel).cost, *input_cost))
             {
                 const auto num_vars = static_cast< uint32_t >(vars.size());
-                auto check          = FullWidthCheckEval(
-                    *context.evaluator, num_vars, *xor_peel, context.bitwidth
-                );
+                auto check = FullWidthCheckEval(*context.evaluator, num_vars, *xor_peel,
+                                                context.bitwidth);
                 if (check.passed) {
                     // This is a genuine (exact) simplification, not the
                     // exhaustion failure final_meta was built to describe. Drop
@@ -1417,14 +1414,12 @@ namespace cobra {
                     final_meta.candidate_failed_verification = false;
                     return Ok(ToSimplifyOutcome(
                         OrchestratorResult{
-                            .outcome = PassOutcome::Success(
-                                std::move(xor_peel), vars, VerificationState::kVerified
-                            ),
+                            .outcome      = PassOutcome::Success(std::move(xor_peel), vars,
+                                                                 VerificationState::kVerified),
                             .metadata     = std::move(final_meta),
                             .run_metadata = context.run_metadata,
                         },
-                        input_expr, telemetry, context.bitwidth, input_cost
-                    ));
+                        input_expr, telemetry, context.bitwidth, input_cost));
                 }
             }
         }
@@ -1435,8 +1430,7 @@ namespace cobra {
                 .metadata     = std::move(final_meta),
                 .run_metadata = context.run_metadata,
             },
-            input_expr, telemetry, context.bitwidth, input_cost
-        ));
+            input_expr, telemetry, context.bitwidth, input_cost));
     }
 
 } // namespace cobra

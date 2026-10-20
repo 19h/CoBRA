@@ -1,5 +1,6 @@
 #include "LiftingPasses.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Classifier.h"
 #include "cobra/core/ExprCost.h"
 #include "cobra/core/ExprUtils.h"
@@ -35,6 +36,7 @@ namespace cobra {
                     return false;
             }
             for (const auto &c : e.children) {
+                ::cobra::budget::Checkpoint();
                 if (!IsPureArithmetic(*c)) { return false; }
             }
             return true;
@@ -57,25 +59,24 @@ namespace cobra {
                 && node.kind != Expr::Kind::kVariable;
         }
 
-        void CollectLiftableAtoms(
-            const Expr &node, bool parent_is_bitwise, const std::vector< std::string > &vars,
-            uint32_t bitwidth, std::vector< LiftCandidate > &out
-        ) {
+        void CollectLiftableAtoms(const Expr &node, bool parent_is_bitwise,
+                                  const cobra::BudgetVector< std::string > &vars,
+                                  uint32_t bitwidth,
+                                  cobra::BudgetVector< LiftCandidate > &out) {
             if (ShouldLift(node, parent_is_bitwise)) {
                 size_t h      = std::hash< Expr >{}(node);
                 auto rendered = Render(node, vars, bitwidth);
-                out.push_back(
-                    LiftCandidate{
-                        .subtree  = &node,
-                        .hash     = h,
-                        .rendered = std::move(rendered),
-                    }
-                );
+                out.push_back(LiftCandidate{
+                    .subtree  = &node,
+                    .hash     = h,
+                    .rendered = std::move(rendered),
+                });
                 return;
             }
 
             bool current_is_bitwise = IsBitwiseKind(node.kind);
             for (const auto &child : node.children) {
+                ::cobra::budget::Checkpoint();
                 CollectLiftableAtoms(*child, current_is_bitwise, vars, bitwidth, out);
             }
         }
@@ -88,16 +89,16 @@ namespace cobra {
             uint32_t virtual_index;
         };
 
-        std::vector< std::string > AllocateFreshVirtualNames(
-            const std::vector< std::string > &existing_vars, const std::string &prefix,
-            size_t count
-        ) {
-            std::unordered_set< std::string > used(existing_vars.begin(), existing_vars.end());
-            std::vector< std::string > names;
+        cobra::BudgetVector< std::string >
+        AllocateFreshVirtualNames(const cobra::BudgetVector< std::string > &existing_vars,
+                                  const std::string &prefix, size_t count) {
+            cobra::BudgetSet< std::string > used(existing_vars.begin(), existing_vars.end());
+            cobra::BudgetVector< std::string > names;
             names.reserve(count);
 
             size_t next_suffix = 0;
             while (names.size() < count) {
+                ::cobra::budget::Checkpoint();
                 auto candidate = prefix + std::to_string(next_suffix++);
                 if (!used.insert(candidate).second) { continue; }
                 names.push_back(std::move(candidate));
@@ -106,17 +107,19 @@ namespace cobra {
             return names;
         }
 
-        std::vector< DeduplicatedAtom > DeduplicateAtoms(
-            const std::vector< LiftCandidate > &candidates, uint32_t first_virtual_index
-        ) {
-            std::vector< DeduplicatedAtom > result;
-            std::unordered_map< size_t, std::vector< size_t > > by_hash;
+        cobra::BudgetVector< DeduplicatedAtom >
+        DeduplicateAtoms(const cobra::BudgetVector< LiftCandidate > &candidates,
+                         uint32_t first_virtual_index) {
+            cobra::BudgetVector< DeduplicatedAtom > result;
+            cobra::BudgetMap< size_t, cobra::BudgetVector< size_t > > by_hash;
 
             for (const auto &cand : candidates) {
+                ::cobra::budget::Checkpoint();
                 bool found = false;
                 auto it    = by_hash.find(cand.hash);
                 if (it != by_hash.end()) {
                     for (size_t idx : it->second) {
+                        ::cobra::budget::Checkpoint();
                         if (result[idx].rendered == cand.rendered) {
                             found = true;
                             break;
@@ -126,36 +129,34 @@ namespace cobra {
                 if (!found) {
                     auto vi = first_virtual_index + static_cast< uint32_t >(result.size());
                     by_hash[cand.hash].push_back(result.size());
-                    result.push_back(
-                        DeduplicatedAtom{
-                            .subtree       = cand.subtree,
-                            .hash          = cand.hash,
-                            .rendered      = cand.rendered,
-                            .virtual_index = vi,
-                        }
-                    );
+                    result.push_back(DeduplicatedAtom{
+                        .subtree       = cand.subtree,
+                        .hash          = cand.hash,
+                        .rendered      = cand.rendered,
+                        .virtual_index = vi,
+                    });
                 }
             }
             return result;
         }
 
-        std::optional< uint32_t > FindVirtualIndex(
-            const Expr &node, const std::vector< DeduplicatedAtom > &atoms,
-            const std::vector< std::string > &vars, uint32_t bitwidth
-        ) {
+        std::optional< uint32_t >
+        FindVirtualIndex(const Expr &node, const cobra::BudgetVector< DeduplicatedAtom > &atoms,
+                         const cobra::BudgetVector< std::string > &vars, uint32_t bitwidth) {
             size_t h      = std::hash< Expr >{}(node);
             auto rendered = Render(node, vars, bitwidth);
             for (const auto &atom : atoms) {
+                ::cobra::budget::Checkpoint();
                 if (atom.hash == h && atom.rendered == rendered) { return atom.virtual_index; }
             }
             return std::nullopt;
         }
 
-        std::unique_ptr< Expr > ReplaceAtomsWithVirtual(
-            const Expr &node, bool parent_is_bitwise,
-            const std::vector< DeduplicatedAtom > &atoms,
-            const std::vector< std::string > &vars, uint32_t bitwidth
-        ) {
+        std::unique_ptr< Expr >
+        ReplaceAtomsWithVirtual(const Expr &node, bool parent_is_bitwise,
+                                const cobra::BudgetVector< DeduplicatedAtom > &atoms,
+                                const cobra::BudgetVector< std::string > &vars,
+                                uint32_t bitwidth) {
             if (ShouldLift(node, parent_is_bitwise)) {
                 // CollectLiftableAtoms walks the same predicate before
                 // ReplaceAtomsWithVirtual runs, so every node reaching
@@ -163,10 +164,8 @@ namespace cobra {
                 // invariant rather than producing Variable(UINT32_MAX)
                 // on a sentinel miss.
                 auto vi = FindVirtualIndex(node, atoms, vars, bitwidth);
-                assert(
-                    vi.has_value()
-                    && "ReplaceAtomsWithVirtual: liftable atom missing from atom table"
-                );
+                assert(vi.has_value()
+                       && "ReplaceAtomsWithVirtual: liftable atom missing from atom table");
                 return Expr::Variable(*vi);
             }
 
@@ -178,22 +177,26 @@ namespace cobra {
 
             bool current_is_bitwise = IsBitwiseKind(node.kind);
             for (const auto &child : node.children) {
+                ::cobra::budget::Checkpoint();
                 result->children.push_back(
-                    ReplaceAtomsWithVirtual(*child, current_is_bitwise, atoms, vars, bitwidth)
-                );
+                    ReplaceAtomsWithVirtual(*child, current_is_bitwise, atoms, vars, bitwidth));
             }
             return result;
         }
 
-        void CollectVarSupport(const Expr &e, std::vector< uint32_t > &out) {
+        void CollectVarSupport(const Expr &e, cobra::BudgetVector< uint32_t > &out) {
             if (e.kind == Expr::Kind::kVariable) {
                 for (uint32_t idx : out) {
+                    ::cobra::budget::Checkpoint();
                     if (idx == e.var_index) { return; }
                 }
                 out.push_back(e.var_index);
                 return;
             }
-            for (const auto &c : e.children) { CollectVarSupport(*c, out); }
+            for (const auto &c : e.children) {
+                ::cobra::budget::Checkpoint();
+                CollectVarSupport(*c, out);
+            }
         }
 
         // Iterative pre-order walk: this function gates the
@@ -202,12 +205,16 @@ namespace cobra {
         // that would blow a recursive call stack.
         uint32_t CountNodes(const Expr &e) {
             uint32_t count = 0;
-            std::vector< const Expr * > stack{ &e };
+            cobra::BudgetVector< const Expr * > stack{ &e };
             while (!stack.empty()) {
+                ::cobra::budget::Checkpoint();
                 const Expr *node = stack.back();
                 stack.pop_back();
                 ++count;
-                for (const auto &c : node->children) { stack.push_back(c.get()); }
+                for (const auto &c : node->children) {
+                    ::cobra::budget::Checkpoint();
+                    stack.push_back(c.get());
+                }
             }
             return count;
         }
@@ -231,16 +238,15 @@ namespace cobra {
         // back-fills it lazily on the next hit.
         uint32_t CollectNonLeafSubtrees(
             const Expr &node, uint32_t &preorder_counter,
-            const std::vector< std::string > &vars, uint32_t bitwidth,
-            std::unordered_map< size_t, std::vector< size_t > > &by_hash,
-            std::vector< RepeatEntry > &entries
-        ) {
+            const cobra::BudgetVector< std::string > &vars, uint32_t bitwidth,
+            cobra::BudgetMap< size_t, cobra::BudgetVector< size_t > > &by_hash,
+            cobra::BudgetVector< RepeatEntry > &entries) {
             const uint32_t my_order = preorder_counter++;
             uint32_t subtree_size   = 1;
             for (const auto &child : node.children) {
-                subtree_size += CollectNonLeafSubtrees(
-                    *child, preorder_counter, vars, bitwidth, by_hash, entries
-                );
+                ::cobra::budget::Checkpoint();
+                subtree_size += CollectNonLeafSubtrees(*child, preorder_counter, vars, bitwidth,
+                                                       by_hash, entries);
             }
 
             const bool kIsLeaf =
@@ -252,6 +258,7 @@ namespace cobra {
             if (hit != by_hash.end()) {
                 auto rendered = Render(node, vars, bitwidth);
                 for (size_t idx : hit->second) {
+                    ::cobra::budget::Checkpoint();
                     if (entries[idx].rendered.empty()) {
                         entries[idx].rendered =
                             Render(*entries[idx].first_occurrence, vars, bitwidth);
@@ -264,35 +271,34 @@ namespace cobra {
             }
 
             by_hash[kHash].push_back(entries.size());
-            entries.push_back(
-                RepeatEntry{
-                    .hash             = kHash,
-                    .rendered         = {},
-                    .first_occurrence = &node,
-                    .count            = 1,
-                    .size             = subtree_size,
-                    .first_preorder   = my_order,
-                }
-            );
+            entries.push_back(RepeatEntry{
+                .hash             = kHash,
+                .rendered         = {},
+                .first_occurrence = &node,
+                .count            = 1,
+                .size             = subtree_size,
+                .first_preorder   = my_order,
+            });
             return subtree_size;
         }
 
         bool IsAncestorOf(const Expr *ancestor, const Expr *descendant) {
             if (ancestor == descendant) { return true; }
             for (const auto &c : ancestor->children) {
+                ::cobra::budget::Checkpoint();
                 if (IsAncestorOf(c.get(), descendant)) { return true; }
             }
             return false;
         }
 
         std::unique_ptr< Expr > ReplaceRepeatsWithVirtual(
-            const Expr &node, const std::vector< DeduplicatedAtom > &atoms,
-            const std::vector< std::string > &vars, uint32_t bitwidth
-        ) {
+            const Expr &node, const cobra::BudgetVector< DeduplicatedAtom > &atoms,
+            const cobra::BudgetVector< std::string > &vars, uint32_t bitwidth) {
             // Check if this node matches a replacement target.
             if (node.kind != Expr::Kind::kConstant && node.kind != Expr::Kind::kVariable) {
                 size_t h = std::hash< Expr >{}(node);
                 for (const auto &atom : atoms) {
+                    ::cobra::budget::Checkpoint();
                     if (atom.hash == h) {
                         auto rendered = Render(node, vars, bitwidth);
                         if (atom.rendered == rendered) {
@@ -310,17 +316,17 @@ namespace cobra {
             result->children.clear();
 
             for (const auto &child : node.children) {
+                ::cobra::budget::Checkpoint();
                 result->children.push_back(
-                    ReplaceRepeatsWithVirtual(*child, atoms, vars, bitwidth)
-                );
+                    ReplaceRepeatsWithVirtual(*child, atoms, vars, bitwidth));
             }
             return result;
         }
 
     } // namespace
 
-    Result< PassResult >
-    RunLiftArithmeticAtoms(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunLiftArithmeticAtoms(const WorkItem &item,
+                                                OrchestratorContext &ctx) {
         COBRA_ZONE_N("RunLiftArithmeticAtoms");
         if (!std::holds_alternative< AstPayload >(item.payload)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
@@ -332,9 +338,10 @@ namespace cobra {
         const auto original_var_count = static_cast< uint32_t >(vars.size());
 
         // Collect liftable arithmetic atoms under bitwise parents.
-        std::vector< LiftCandidate > candidates;
+        cobra::BudgetVector< LiftCandidate > candidates;
         bool root_is_bitwise = IsBitwiseKind(ast.expr->kind);
         for (const auto &child : ast.expr->children) {
+            ::cobra::budget::Checkpoint();
             CollectLiftableAtoms(*child, root_is_bitwise, vars, ctx.bitwidth, candidates);
         }
 
@@ -375,29 +382,26 @@ namespace cobra {
         auto outer_expr = ReplaceAtomsWithVirtual(*ast.expr, false, atoms, vars, ctx.bitwidth);
 
         // Build extended variable list: original vars + virtual vars.
-        std::vector< std::string > outer_vars = vars;
+        cobra::BudgetVector< std::string > outer_vars = vars;
         auto virtual_names = AllocateFreshVirtualNames(vars, "v", atoms.size());
-        outer_vars.insert(
-            outer_vars.end(), std::make_move_iterator(virtual_names.begin()),
-            std::make_move_iterator(virtual_names.end())
-        );
+        outer_vars.insert(outer_vars.end(), std::make_move_iterator(virtual_names.begin()),
+                          std::make_move_iterator(virtual_names.end()));
 
         // Build bindings.
-        std::vector< LiftedBinding > bindings;
+        cobra::BudgetVector< LiftedBinding > bindings;
         bindings.reserve(atoms.size());
         for (const auto &atom : atoms) {
-            std::vector< uint32_t > support;
+            ::cobra::budget::Checkpoint();
+            cobra::BudgetVector< uint32_t > support;
             CollectVarSupport(*atom.subtree, support);
 
-            bindings.push_back(
-                LiftedBinding{
-                    .kind             = LiftedValueKind::kArithmeticAtom,
-                    .outer_var_index  = atom.virtual_index,
-                    .subtree          = CloneExpr(*atom.subtree),
-                    .structural_hash  = atom.hash,
-                    .original_support = std::move(support),
-                }
-            );
+            bindings.push_back(LiftedBinding{
+                .kind             = LiftedValueKind::kArithmeticAtom,
+                .outer_var_index  = atom.virtual_index,
+                .subtree          = CloneExpr(*atom.subtree),
+                .structural_hash  = atom.hash,
+                .original_support = std::move(support),
+            });
         }
 
         // Boolean signature for the outer expression.
@@ -444,8 +448,8 @@ namespace cobra {
         return Ok(std::move(result));
     }
 
-    Result< PassResult >
-    RunLiftRepeatedSubexpressions(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunLiftRepeatedSubexpressions(const WorkItem &item,
+                                                       OrchestratorContext &ctx) {
         COBRA_ZONE_N("RunLiftRepeatedSubexpressions");
         if (!std::holds_alternative< AstPayload >(item.payload)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
@@ -466,14 +470,15 @@ namespace cobra {
         // Candidate discovery: traverse all non-leaf subtrees,
         // group by structural hash + rendered string equality,
         // track occurrence count, size, and first pre-order index.
-        std::unordered_map< size_t, std::vector< size_t > > by_hash;
-        std::vector< RepeatEntry > entries;
+        cobra::BudgetMap< size_t, cobra::BudgetVector< size_t > > by_hash;
+        cobra::BudgetVector< RepeatEntry > entries;
         uint32_t preorder = 0;
         CollectNonLeafSubtrees(*ast.expr, preorder, vars, ctx.bitwidth, by_hash, entries);
 
         // Filter: keep only candidates with count >= 2 AND size >= 4.
-        std::vector< RepeatEntry * > viable;
+        cobra::BudgetVector< RepeatEntry * > viable;
         for (auto &entry : entries) {
+            ::cobra::budget::Checkpoint();
             if (entry.count >= 2 && entry.size >= kMinRepeatSize) { viable.push_back(&entry); }
         }
 
@@ -500,11 +505,13 @@ namespace cobra {
             ? ctx.opts.max_vars - original_var_count
             : 0U;
 
-        std::vector< const RepeatEntry * > selected;
+        cobra::BudgetVector< const RepeatEntry * > selected;
         for (const auto *cand : viable) {
+            ::cobra::budget::Checkpoint();
             if (selected.size() >= var_budget) { break; }
             bool overlaps = false;
             for (const auto *sel : selected) {
+                ::cobra::budget::Checkpoint();
                 if (IsAncestorOf(sel->first_occurrence, cand->first_occurrence)
                     || IsAncestorOf(cand->first_occurrence, sel->first_occurrence))
                 {
@@ -520,48 +527,44 @@ namespace cobra {
         }
 
         // Build DeduplicatedAtom vector for replacement.
-        std::vector< DeduplicatedAtom > atoms;
+        cobra::BudgetVector< DeduplicatedAtom > atoms;
         atoms.reserve(selected.size());
         for (size_t i = 0; i < selected.size(); ++i) {
+            ::cobra::budget::Checkpoint();
             auto vi = original_var_count + static_cast< uint32_t >(i);
-            atoms.push_back(
-                DeduplicatedAtom{
-                    .subtree       = selected[i]->first_occurrence,
-                    .hash          = selected[i]->hash,
-                    .rendered      = selected[i]->rendered,
-                    .virtual_index = vi,
-                }
-            );
+            atoms.push_back(DeduplicatedAtom{
+                .subtree       = selected[i]->first_occurrence,
+                .hash          = selected[i]->hash,
+                .rendered      = selected[i]->rendered,
+                .virtual_index = vi,
+            });
         }
 
         // Build outer expression by replacing repeated subtrees.
         auto outer_expr = ReplaceRepeatsWithVirtual(*ast.expr, atoms, vars, ctx.bitwidth);
 
         // Build extended variable list: original vars + virtual vars.
-        std::vector< std::string > outer_vars = vars;
+        cobra::BudgetVector< std::string > outer_vars = vars;
         auto virtual_names = AllocateFreshVirtualNames(vars, "r", selected.size());
-        outer_vars.insert(
-            outer_vars.end(), std::make_move_iterator(virtual_names.begin()),
-            std::make_move_iterator(virtual_names.end())
-        );
+        outer_vars.insert(outer_vars.end(), std::make_move_iterator(virtual_names.begin()),
+                          std::make_move_iterator(virtual_names.end()));
 
         // Build bindings — use atoms (which have copies of
         // rendered strings) instead of selected for subtree access.
-        std::vector< LiftedBinding > bindings;
+        cobra::BudgetVector< LiftedBinding > bindings;
         bindings.reserve(atoms.size());
         for (const auto &atom : atoms) {
-            std::vector< uint32_t > support;
+            ::cobra::budget::Checkpoint();
+            cobra::BudgetVector< uint32_t > support;
             CollectVarSupport(*atom.subtree, support);
 
-            bindings.push_back(
-                LiftedBinding{
-                    .kind             = LiftedValueKind::kRepeatedSubexpression,
-                    .outer_var_index  = atom.virtual_index,
-                    .subtree          = CloneExpr(*atom.subtree),
-                    .structural_hash  = atom.hash,
-                    .original_support = std::move(support),
-                }
-            );
+            bindings.push_back(LiftedBinding{
+                .kind             = LiftedValueKind::kRepeatedSubexpression,
+                .outer_var_index  = atom.virtual_index,
+                .subtree          = CloneExpr(*atom.subtree),
+                .structural_hash  = atom.hash,
+                .original_support = std::move(support),
+            });
         }
 
         // Boolean signature for the outer expression.

@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/MathUtils.h"
 #include <array>
@@ -17,13 +18,19 @@ namespace cobra {
         static MonomialKey FromExponents(const uint8_t *exps, uint8_t num_vars) {
             assert(num_vars <= kMaxPolyVars);
             MonomialKey k;
-            for (uint8_t i = 0; i < num_vars; ++i) { k.exponents[i] = exps[i]; }
+            for (uint8_t i = 0; i < num_vars; ++i) {
+                ::cobra::budget::Checkpoint();
+                k.exponents[i] = exps[i];
+            }
             return k;
         }
 
         void ToExponents(uint8_t *out, uint8_t num_vars) const {
             assert(num_vars <= kMaxPolyVars);
-            for (uint8_t i = 0; i < num_vars; ++i) { out[i] = exponents[i]; }
+            for (uint8_t i = 0; i < num_vars; ++i) {
+                ::cobra::budget::Checkpoint();
+                out[i] = exponents[i];
+            }
         }
 
         uint8_t ExponentAt(uint8_t var_index) const {
@@ -41,7 +48,10 @@ namespace cobra {
         uint32_t TotalDegree(uint8_t num_vars) const {
             assert(num_vars <= kMaxPolyVars);
             uint32_t sum = 0;
-            for (uint8_t i = 0; i < num_vars; ++i) { sum += exponents[i]; }
+            for (uint8_t i = 0; i < num_vars; ++i) {
+                ::cobra::budget::Checkpoint();
+                sum += exponents[i];
+            }
             return sum;
         }
 
@@ -49,6 +59,7 @@ namespace cobra {
             assert(num_vars <= kMaxPolyVars);
             uint8_t mx = 0;
             for (uint8_t i = 0; i < num_vars; ++i) {
+                ::cobra::budget::Checkpoint();
                 if (exponents[i] > mx) { mx = exponents[i]; }
             }
             return mx;
@@ -57,7 +68,10 @@ namespace cobra {
         uint32_t V2FactorialWeight(uint8_t num_vars) const {
             assert(num_vars <= kMaxPolyVars);
             uint32_t w = 0;
-            for (uint8_t i = 0; i < num_vars; ++i) { w += TwosInFactorial(exponents[i]); }
+            for (uint8_t i = 0; i < num_vars; ++i) {
+                ::cobra::budget::Checkpoint();
+                w += TwosInFactorial(exponents[i]);
+            }
             return w;
         }
 
@@ -74,6 +88,7 @@ struct std::hash< cobra::MonomialKey >
     size_t operator()(const cobra::MonomialKey &k) const {
         size_t hash = 14695981039346656037ULL;
         for (uint8_t b : k.exponents) {
+            ::cobra::budget::Checkpoint();
             hash ^= static_cast< size_t >(b);
             hash *= 1099511628211ULL;
         }

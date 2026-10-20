@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "Orchestrator.h"
 #include "cobra/core/Result.h"
@@ -30,9 +31,9 @@ namespace cobra {
     // (rewrite_gen == 0 and lowering has not fired). Otherwise re-evaluates
     // from the AST, since the stored signature would be stale.
     // Respects AstSolveContext local vars/sig when present.
-    std::vector< uint64_t > ComputeDecompositionSignature(
-        const WorkItem &item, const OrchestratorContext &ctx, uint32_t rewrite_gen
-    );
+    cobra::BudgetVector< uint64_t >
+    ComputeDecompositionSignature(const WorkItem &item, const OrchestratorContext &ctx,
+                                  uint32_t rewrite_gen);
 
     // Decomposition extractor passes: each extracts an arithmetic core
     // from an MBA expression using a different strategy.
@@ -54,8 +55,8 @@ namespace cobra {
     Result< PassResult > RunResidualPolyRecovery(const WorkItem &, OrchestratorContext &);
     Result< PassResult > RunResidualGhost(const WorkItem &, OrchestratorContext &);
     Result< PassResult > RunResidualFactoredGhost(const WorkItem &, OrchestratorContext &);
-    Result< PassResult >
-    RunResidualFactoredGhostEscalated(const WorkItem &, OrchestratorContext &);
+    Result< PassResult > RunResidualFactoredGhostEscalated(const WorkItem &,
+                                                           OrchestratorContext &);
     Result< PassResult > RunResidualTemplate(const WorkItem &, OrchestratorContext &);
 
 } // namespace cobra

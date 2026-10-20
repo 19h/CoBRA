@@ -3,6 +3,7 @@
 #include "DecompositionPassHelpers.h"
 #include "OrchestratorPasses.h"
 #include "cobra/core/AuxVarEliminator.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/DecompositionEngine.h"
 #include "cobra/core/ExprCost.h"
 #include "cobra/core/ExprUtils.h"
@@ -29,9 +30,8 @@ namespace cobra {
 
         std::optional< PassResult > TryRecombineAndEmit(
             const RemainderStatePayload &residual, std::unique_ptr< Expr > solved_expr,
-            const std::vector< std::string > &solved_expr_vars, const WorkItem &parent,
-            OrchestratorContext &ctx, PassId producing_pass, ResidualSolverKind solver_kind
-        ) {
+            const cobra::BudgetVector< std::string > &solved_expr_vars, const WorkItem &parent,
+            OrchestratorContext &ctx, PassId producing_pass, ResidualSolverKind solver_kind) {
             // Resolve target-local variable space: prefer the residual's
             // target context when populated, fall back to the global context.
             const auto &target_vars =
@@ -91,10 +91,9 @@ namespace cobra {
         }
 
         template< typename ExtractorFn >
-        Result< PassResult > RunExtractor(
-            const WorkItem &item, OrchestratorContext &ctx, PassId pass_id,
-            ExtractorKind expected_kind, ExtractorFn extractor_fn
-        ) {
+        Result< PassResult > RunExtractor(const WorkItem &item, OrchestratorContext &ctx,
+                                          PassId pass_id, ExtractorKind expected_kind,
+                                          ExtractorFn extractor_fn) {
             if (!IsAstKind(item)) {
                 return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
             }
@@ -106,18 +105,16 @@ namespace cobra {
                 return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
             }
             if (!active_eval) {
-                return Ok(
-                    PassResult{
-                        .decision = PassDecision::kBlocked,
-                        .reason =
-                            ReasonDetail{
-                                         .top = { .code    = { ReasonCategory::kGuardFailed,
-                                                      ReasonDomain::kDecomposition,
-                                                      decomposition::kNoEvaluator },
-                                         .message = "Decomposition requires evaluator" },
-                                         },
-                }
-                );
+                return Ok(PassResult{
+                    .decision = PassDecision::kBlocked,
+                    .reason =
+                        ReasonDetail{
+                                     .top = { .code    = { ReasonCategory::kGuardFailed,
+                                                  ReasonDomain::kDecomposition,
+                                                  decomposition::kNoEvaluator },
+                                     .message = "Decomposition requires evaluator" },
+                                     },
+                });
             }
 
             auto decomp_sig = ComputeDecompositionSignature(item, ctx, item.rewrite_gen);
@@ -149,13 +146,11 @@ namespace cobra {
                         decision = PassDecision::kBlocked;
                         break;
                 }
-                return Ok(
-                    PassResult{
-                        .decision    = decision,
-                        .disposition = ItemDisposition::kRetainCurrent,
-                        .reason      = core.Reason(),
-                    }
-                );
+                return Ok(PassResult{
+                    .decision    = decision,
+                    .disposition = ItemDisposition::kRetainCurrent,
+                    .reason      = core.Reason(),
+                });
             }
 
             auto core_payload   = core.TakePayload();
@@ -183,12 +178,10 @@ namespace cobra {
                     && !EliminateAuxVars(decomp_sig, active_vars, *active_eval, ctx.bitwidth)
                             .spurious_vars.empty())
                 {
-                    return Ok(
-                        PassResult{
-                            .decision    = PassDecision::kNotApplicable,
-                            .disposition = ItemDisposition::kRetainCurrent,
-                        }
-                    );
+                    return Ok(PassResult{
+                        .decision    = PassDecision::kNotApplicable,
+                        .disposition = ItemDisposition::kRetainCurrent,
+                    });
                 }
                 auto cost_info = ComputeCost(*core_payload.expr);
                 WorkItem cand_item;
@@ -223,20 +216,18 @@ namespace cobra {
             // AcceptCore gate for polynomial extractors
             if (expected_kind == ExtractorKind::kPolynomial) {
                 if (!AcceptCore(dctx, core_payload)) {
-                    return Ok(
-                        PassResult{
-                            .decision    = PassDecision::kBlocked,
-                            .disposition = ItemDisposition::kRetainCurrent,
-                            .reason =
-                                ReasonDetail{
-                                             .top = { .code    = { ReasonCategory::kInapplicable,
-                                                          ReasonDomain::kDecomposition,
-                                                          decomposition::kCoreRejected },
-                                             .message = "polynomial core rejected by "
-                                                        "acceptance gate" },
-                                             },
-                    }
-                    );
+                    return Ok(PassResult{
+                        .decision    = PassDecision::kBlocked,
+                        .disposition = ItemDisposition::kRetainCurrent,
+                        .reason =
+                            ReasonDetail{
+                                         .top = { .code    = { ReasonCategory::kInapplicable,
+                                                      ReasonDomain::kDecomposition,
+                                                      decomposition::kCoreRejected },
+                                         .message = "polynomial core rejected by "
+                                                    "acceptance gate" },
+                                         },
+                    });
                 }
             }
 
@@ -273,41 +264,36 @@ namespace cobra {
     Result< PassResult > RunExtractProductCore(const WorkItem &item, OrchestratorContext &ctx) {
         return RunExtractor(
             item, ctx, PassId::kExtractProductCore, ExtractorKind::kProductAST,
-            [](const DecompositionContext &dctx) { return ExtractProductCore(dctx); }
-        );
+            [](const DecompositionContext &dctx) { return ExtractProductCore(dctx); });
     }
 
     Result< PassResult > RunExtractPolyCoreD2(const WorkItem &item, OrchestratorContext &ctx) {
         return RunExtractor(
             item, ctx, PassId::kExtractPolyCoreD2, ExtractorKind::kPolynomial,
-            [](const DecompositionContext &dctx) { return ExtractPolyCore(dctx, 2); }
-        );
+            [](const DecompositionContext &dctx) { return ExtractPolyCore(dctx, 2); });
     }
 
-    Result< PassResult >
-    RunExtractTemplateCore(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunExtractTemplateCore(const WorkItem &item,
+                                                OrchestratorContext &ctx) {
         return RunExtractor(
             item, ctx, PassId::kExtractTemplateCore, ExtractorKind::kTemplate,
-            [](const DecompositionContext &dctx) { return ExtractTemplateCore(dctx); }
-        );
+            [](const DecompositionContext &dctx) { return ExtractTemplateCore(dctx); });
     }
 
     Result< PassResult > RunExtractPolyCoreD3(const WorkItem &item, OrchestratorContext &ctx) {
         return RunExtractor(
             item, ctx, PassId::kExtractPolyCoreD3, ExtractorKind::kPolynomial,
-            [](const DecompositionContext &dctx) { return ExtractPolyCore(dctx, 3); }
-        );
+            [](const DecompositionContext &dctx) { return ExtractPolyCore(dctx, 3); });
     }
 
     Result< PassResult > RunExtractPolyCoreD4(const WorkItem &item, OrchestratorContext &ctx) {
         return RunExtractor(
             item, ctx, PassId::kExtractPolyCoreD4, ExtractorKind::kPolynomial,
-            [](const DecompositionContext &dctx) { return ExtractPolyCore(dctx, 4); }
-        );
+            [](const DecompositionContext &dctx) { return ExtractPolyCore(dctx, 4); });
     }
 
-    Result< PassResult >
-    RunPrepareDirectRemainder(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunPrepareDirectRemainder(const WorkItem &item,
+                                                   OrchestratorContext &ctx) {
         COBRA_ZONE_N("RunPrepareDirectRemainder");
         if (!IsAstKind(item)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
@@ -315,18 +301,16 @@ namespace cobra {
         const auto &active_vars = ActiveAstVars(item, ctx);
         const auto &active_eval = ActiveAstEvaluator(item, ctx);
         if (!active_eval) {
-            return Ok(
-                PassResult{
-                    .decision = PassDecision::kBlocked,
-                    .reason =
-                        ReasonDetail{
-                                     .top = { .code    = { ReasonCategory::kGuardFailed,
-                                                  ReasonDomain::kDecomposition,
-                                                  decomposition::kNoEvaluator },
-                                     .message = "Decomposition requires evaluator" },
-                                     },
-            }
-            );
+            return Ok(PassResult{
+                .decision = PassDecision::kBlocked,
+                .reason =
+                    ReasonDetail{
+                                 .top = { .code    = { ReasonCategory::kGuardFailed,
+                                              ReasonDomain::kDecomposition,
+                                              decomposition::kNoEvaluator },
+                                 .message = "Decomposition requires evaluator" },
+                                 },
+            });
         }
 
         auto decomp_sig     = ComputeDecompositionSignature(item, ctx, item.rewrite_gen);
@@ -339,12 +323,10 @@ namespace cobra {
             IsBooleanNullResidual(*active_eval, support, num_vars, ctx.bitwidth, decomp_sig);
 
         if (!is_bn) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNotApplicable,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNotApplicable,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         WorkItem residual_item;
@@ -381,26 +363,24 @@ namespace cobra {
         return Ok(std::move(result));
     }
 
-    Result< PassResult >
-    RunPrepareRemainderFromCore(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunPrepareRemainderFromCore(const WorkItem &item,
+                                                     OrchestratorContext &ctx) {
         COBRA_ZONE_N("RunPrepareRemainderFromCore");
         if (!std::holds_alternative< CoreCandidatePayload >(item.payload)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
         }
         const auto &core = std::get< CoreCandidatePayload >(item.payload);
         if (core.target.vars.empty() && !ctx.evaluator) {
-            return Ok(
-                PassResult{
-                    .decision = PassDecision::kBlocked,
-                    .reason =
-                        ReasonDetail{
-                                     .top = { .code    = { ReasonCategory::kGuardFailed,
-                                                  ReasonDomain::kDecomposition,
-                                                  decomposition::kNoEvaluator },
-                                     .message = "Decomposition requires evaluator" },
-                                     },
-            }
-            );
+            return Ok(PassResult{
+                .decision = PassDecision::kBlocked,
+                .reason =
+                    ReasonDetail{
+                                 .top = { .code    = { ReasonCategory::kGuardFailed,
+                                              ReasonDomain::kDecomposition,
+                                              decomposition::kNoEvaluator },
+                                 .message = "Decomposition requires evaluator" },
+                                 },
+            });
         }
 
         // Resolve target-local variable space from the core's target context.
@@ -491,55 +471,47 @@ namespace cobra {
         const auto res_real_count =
             static_cast< uint32_t >(residual.remainder_elim.real_vars.size());
         if (res_real_count > kMaxResidualSupport) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNotApplicable,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNotApplicable,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         const auto &target_vars =
             residual.target.vars.empty() ? ctx.original_vars : residual.target.vars;
         const auto num_vars = static_cast< uint32_t >(target_vars.size());
-        auto ghost          = SolveGhostResidual(
-            residual.remainder_eval, residual.remainder_support, num_vars, ctx.bitwidth
-        );
+        auto ghost = SolveGhostResidual(residual.remainder_eval, residual.remainder_support,
+                                        num_vars, ctx.bitwidth);
         if (!ghost.Succeeded()) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kBlocked,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                    .reason      = ghost.Reason(),
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kBlocked,
+                .disposition = ItemDisposition::kRetainCurrent,
+                .reason      = ghost.Reason(),
+            });
         }
 
         auto ghost_payload = ghost.TakePayload();
-        auto recombined    = TryRecombineAndEmit(
-            residual, std::move(ghost_payload.expr), target_vars, item, ctx,
-            PassId::kResidualGhost, ResidualSolverKind::kGhostResidual
-        );
+        auto recombined =
+            TryRecombineAndEmit(residual, std::move(ghost_payload.expr), target_vars, item, ctx,
+                                PassId::kResidualGhost, ResidualSolverKind::kGhostResidual);
         if (recombined) { return Ok(std::move(*recombined)); }
 
-        return Ok(
-            PassResult{
-                .decision    = PassDecision::kBlocked,
-                .disposition = ItemDisposition::kRetainCurrent,
-                .reason =
-                    ReasonDetail{
-                                 .top = { .code    = { ReasonCategory::kVerifyFailed,
-                                              ReasonDomain::kGhostResidual,
-                                              decomposition::kResidualFailed },
-                                 .message = "ghost residual recombination failed "
-                                            "full-width verification" },
-                                 },
-        }
-        );
+        return Ok(PassResult{
+            .decision    = PassDecision::kBlocked,
+            .disposition = ItemDisposition::kRetainCurrent,
+            .reason =
+                ReasonDetail{
+                             .top = { .code    = { ReasonCategory::kVerifyFailed,
+                                          ReasonDomain::kGhostResidual,
+                                          decomposition::kResidualFailed },
+                             .message = "ghost residual recombination failed "
+                                        "full-width verification" },
+                             },
+        });
     }
 
-    Result< PassResult >
-    RunResidualFactoredGhost(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunResidualFactoredGhost(const WorkItem &item,
+                                                  OrchestratorContext &ctx) {
         if (!IsResidualKind(item)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
         }
@@ -550,55 +522,47 @@ namespace cobra {
         const auto res_real_count =
             static_cast< uint32_t >(residual.remainder_elim.real_vars.size());
         if (res_real_count > kMaxResidualSupport) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNotApplicable,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNotApplicable,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         const auto &target_vars =
             residual.target.vars.empty() ? ctx.original_vars : residual.target.vars;
         const auto num_vars = static_cast< uint32_t >(target_vars.size());
         auto factored       = SolveFactoredGhostResidual(
-            residual.remainder_eval, residual.remainder_support, num_vars, ctx.bitwidth
-        );
+            residual.remainder_eval, residual.remainder_support, num_vars, ctx.bitwidth);
         if (!factored.Succeeded()) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kBlocked,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                    .reason      = factored.Reason(),
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kBlocked,
+                .disposition = ItemDisposition::kRetainCurrent,
+                .reason      = factored.Reason(),
+            });
         }
 
         auto factored_payload = factored.TakePayload();
         auto recombined       = TryRecombineAndEmit(
             residual, std::move(factored_payload.expr), target_vars, item, ctx,
-            PassId::kResidualFactoredGhost, ResidualSolverKind::kGhostResidual
-        );
+            PassId::kResidualFactoredGhost, ResidualSolverKind::kGhostResidual);
         if (recombined) { return Ok(std::move(*recombined)); }
 
-        return Ok(
-            PassResult{
-                .decision    = PassDecision::kBlocked,
-                .disposition = ItemDisposition::kRetainCurrent,
-                .reason =
-                    ReasonDetail{
-                                 .top = { .code    = { ReasonCategory::kVerifyFailed,
-                                              ReasonDomain::kGhostResidual,
-                                              decomposition::kResidualFailed },
-                                 .message = "factored ghost recombination failed "
-                                            "full-width verification" },
-                                 },
-        }
-        );
+        return Ok(PassResult{
+            .decision    = PassDecision::kBlocked,
+            .disposition = ItemDisposition::kRetainCurrent,
+            .reason =
+                ReasonDetail{
+                             .top = { .code    = { ReasonCategory::kVerifyFailed,
+                                          ReasonDomain::kGhostResidual,
+                                          decomposition::kResidualFailed },
+                             .message = "factored ghost recombination failed "
+                                        "full-width verification" },
+                             },
+        });
     }
 
-    Result< PassResult >
-    RunResidualFactoredGhostEscalated(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunResidualFactoredGhostEscalated(const WorkItem &item,
+                                                           OrchestratorContext &ctx) {
         if (!IsResidualKind(item)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
         }
@@ -609,56 +573,49 @@ namespace cobra {
         const auto res_real_count =
             static_cast< uint32_t >(residual.remainder_elim.real_vars.size());
         if (res_real_count > kMaxResidualSupport) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNotApplicable,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNotApplicable,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         const auto &target_vars =
             residual.target.vars.empty() ? ctx.original_vars : residual.target.vars;
         const auto num_vars = static_cast< uint32_t >(target_vars.size());
         uint8_t grid        = (res_real_count <= 2) ? 3 : 2;
-        auto factored       = SolveFactoredGhostResidual(
-            residual.remainder_eval, residual.remainder_support, num_vars, ctx.bitwidth, 2, grid
-        );
+        auto factored =
+            SolveFactoredGhostResidual(residual.remainder_eval, residual.remainder_support,
+                                       num_vars, ctx.bitwidth, 2, grid);
         if (!factored.Succeeded()) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kBlocked,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                    .reason      = factored.Reason(),
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kBlocked,
+                .disposition = ItemDisposition::kRetainCurrent,
+                .reason      = factored.Reason(),
+            });
         }
 
         auto factored_payload = factored.TakePayload();
         auto recombined       = TryRecombineAndEmit(
             residual, std::move(factored_payload.expr), target_vars, item, ctx,
-            PassId::kResidualFactoredGhostEscalated, ResidualSolverKind::kGhostResidual
-        );
+            PassId::kResidualFactoredGhostEscalated, ResidualSolverKind::kGhostResidual);
         if (recombined) { return Ok(std::move(*recombined)); }
 
-        return Ok(
-            PassResult{
-                .decision    = PassDecision::kBlocked,
-                .disposition = ItemDisposition::kRetainCurrent,
-                .reason =
-                    ReasonDetail{
-                                 .top = { .code    = { ReasonCategory::kVerifyFailed,
-                                              ReasonDomain::kGhostResidual,
-                                              decomposition::kResidualFailed },
-                                 .message = "escalated factored ghost recombination "
-                                            "failed full-width verification" },
-                                 },
-        }
-        );
+        return Ok(PassResult{
+            .decision    = PassDecision::kBlocked,
+            .disposition = ItemDisposition::kRetainCurrent,
+            .reason =
+                ReasonDetail{
+                             .top = { .code    = { ReasonCategory::kVerifyFailed,
+                                          ReasonDomain::kGhostResidual,
+                                          decomposition::kResidualFailed },
+                             .message = "escalated factored ghost recombination "
+                                        "failed full-width verification" },
+                             },
+        });
     }
 
-    Result< PassResult >
-    RunResidualPolyRecovery(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunResidualPolyRecovery(const WorkItem &item,
+                                                 OrchestratorContext &ctx) {
         COBRA_ZONE_N("RunResidualPolyRecovery");
         if (!IsResidualKind(item)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
@@ -673,41 +630,35 @@ namespace cobra {
         const auto &target_vars =
             residual.target.vars.empty() ? ctx.original_vars : residual.target.vars;
         const auto num_vars = static_cast< uint32_t >(target_vars.size());
-        auto res_poly       = RecoverAndVerifyPoly(
-            residual.remainder_eval, residual.remainder_support, num_vars, ctx.bitwidth, 4,
-            residual.degree_floor
-        );
+        auto res_poly =
+            RecoverAndVerifyPoly(residual.remainder_eval, residual.remainder_support, num_vars,
+                                 ctx.bitwidth, 4, residual.degree_floor);
         if (!res_poly.Succeeded()) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kBlocked,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                    .reason      = res_poly.Reason(),
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kBlocked,
+                .disposition = ItemDisposition::kRetainCurrent,
+                .reason      = res_poly.Reason(),
+            });
         }
 
         auto poly_payload = res_poly.TakePayload();
         auto recombined   = TryRecombineAndEmit(
             residual, std::move(poly_payload.expr), target_vars, item, ctx,
-            PassId::kResidualPolyRecovery, ResidualSolverKind::kPolynomialRecovery
-        );
+            PassId::kResidualPolyRecovery, ResidualSolverKind::kPolynomialRecovery);
         if (recombined) { return Ok(std::move(*recombined)); }
 
-        return Ok(
-            PassResult{
-                .decision    = PassDecision::kBlocked,
-                .disposition = ItemDisposition::kRetainCurrent,
-                .reason =
-                    ReasonDetail{
-                                 .top = { .code    = { ReasonCategory::kVerifyFailed,
-                                              ReasonDomain::kPolynomialRecovery,
-                                              decomposition::kResidualFailed },
-                                 .message = "polynomial residual recombination "
-                                            "failed full-width verification" },
-                                 },
-        }
-        );
+        return Ok(PassResult{
+            .decision    = PassDecision::kBlocked,
+            .disposition = ItemDisposition::kRetainCurrent,
+            .reason =
+                ReasonDetail{
+                             .top = { .code    = { ReasonCategory::kVerifyFailed,
+                                          ReasonDomain::kPolynomialRecovery,
+                                          decomposition::kResidualFailed },
+                             .message = "polynomial residual recombination "
+                                        "failed full-width verification" },
+                             },
+        });
     }
 
     Result< PassResult > RunResidualSupported(const WorkItem &item, OrchestratorContext &ctx) {
@@ -725,19 +676,17 @@ namespace cobra {
         auto elim                 = EliminateAuxVars(residual.remainder_sig, target_vars);
         const auto real_var_count = static_cast< uint32_t >(elim.real_vars.size());
         if (real_var_count == 0 || real_var_count > ctx.opts.max_vars) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kBlocked,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                    .reason =
-                        ReasonDetail{
-                                     .top = { .code    = { ReasonCategory::kNoSolution,
-                                                  ReasonDomain::kDecomposition,
-                                                  decomposition::kResidualFailed },
-                                     .message = "residual variable count out of range" },
-                                     },
-            }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kBlocked,
+                .disposition = ItemDisposition::kRetainCurrent,
+                .reason =
+                    ReasonDetail{
+                                 .top = { .code    = { ReasonCategory::kNoSolution,
+                                              ReasonDomain::kDecomposition,
+                                              decomposition::kResidualFailed },
+                                 .message = "residual variable count out of range" },
+                                 },
+            });
         }
 
         auto original_indices = BuildVarSupport(target_vars, elim.real_vars);
@@ -813,14 +762,19 @@ namespace cobra {
         if (residual.remainder_elim.real_vars.size() == target_vars.size()) {
             res_sig_ctx.eval = residual.remainder_eval;
         } else {
-            res_sig_ctx.eval = [residual_eval = residual.remainder_eval,
-                                idx           = residual.remainder_support,
-                                full          = std::vector< uint64_t >(target_vars.size(), 0)](
-                                   const std::vector< uint64_t > &rv
-                               ) mutable -> uint64_t {
-                for (size_t i = 0; i < idx.size(); ++i) { full[idx[i]] = rv[i]; }
+            res_sig_ctx.eval =
+                [residual_eval = residual.remainder_eval, idx = residual.remainder_support,
+                 full = cobra::BudgetVector< uint64_t >(target_vars.size(), 0)](
+                    const cobra::BudgetVector< uint64_t > &rv) mutable -> uint64_t {
+                for (size_t i = 0; i < idx.size(); ++i) {
+                    ::cobra::budget::Checkpoint();
+                    full[idx[i]] = rv[i];
+                }
                 uint64_t result = residual_eval(full);
-                for (size_t i = 0; i < idx.size(); ++i) { full[idx[i]] = 0; }
+                for (size_t i = 0; i < idx.size(); ++i) {
+                    ::cobra::budget::Checkpoint();
+                    full[idx[i]] = 0;
+                }
                 return result;
             };
         }
@@ -830,36 +784,31 @@ namespace cobra {
 
         auto td = TryTemplateDecomposition(res_sig_ctx, residual_opts, res_real_count, nullptr);
         if (!td.Succeeded()) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kBlocked,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                    .reason      = td.Reason(),
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kBlocked,
+                .disposition = ItemDisposition::kRetainCurrent,
+                .reason      = td.Reason(),
+            });
         }
 
         auto solved_expr = std::move(td.TakePayload().expr);
         auto recombined  = TryRecombineAndEmit(
             residual, std::move(solved_expr), residual.remainder_elim.real_vars, item, ctx,
-            PassId::kResidualTemplate, ResidualSolverKind::kTemplateDecomposition
-        );
+            PassId::kResidualTemplate, ResidualSolverKind::kTemplateDecomposition);
         if (recombined) { return Ok(std::move(*recombined)); }
 
-        return Ok(
-            PassResult{
-                .decision    = PassDecision::kBlocked,
-                .disposition = ItemDisposition::kRetainCurrent,
-                .reason =
-                    ReasonDetail{
-                                 .top = { .code    = { ReasonCategory::kVerifyFailed,
-                                              ReasonDomain::kTemplateDecomposer,
-                                              decomposition::kResidualFailed },
-                                 .message = "template residual recombination "
-                                            "failed full-width verification" },
-                                 },
-        }
-        );
+        return Ok(PassResult{
+            .decision    = PassDecision::kBlocked,
+            .disposition = ItemDisposition::kRetainCurrent,
+            .reason =
+                ReasonDetail{
+                             .top = { .code    = { ReasonCategory::kVerifyFailed,
+                                          ReasonDomain::kTemplateDecomposer,
+                                          decomposition::kResidualFailed },
+                             .message = "template residual recombination "
+                                        "failed full-width verification" },
+                             },
+        });
     }
 
 } // namespace cobra

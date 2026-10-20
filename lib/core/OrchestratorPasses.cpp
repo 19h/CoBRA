@@ -10,6 +10,7 @@
 #include "cobra/core/AnfTransform.h"
 #include "cobra/core/AuxVarEliminator.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Classifier.h"
 #include "cobra/core/DecompositionEngine.h"
 #include "cobra/core/ExprCost.h"
@@ -49,8 +50,7 @@ namespace cobra {
 
         std::optional< PassResult > TryConstantSignatureCandidate(
             const WorkItem &item, const std::optional< Evaluator > &active_eval,
-            const std::vector< uint64_t > &sig, uint32_t num_vars, uint32_t bitwidth
-        ) {
+            const cobra::BudgetVector< uint64_t > &sig, uint32_t num_vars, uint32_t bitwidth) {
             auto pm = MatchPattern(sig, num_vars, bitwidth);
             if (!pm || (*pm)->kind != Expr::Kind::kConstant) { return std::nullopt; }
 
@@ -88,11 +88,10 @@ namespace cobra {
             return true;
         }
 
-        PassResult EmitBooleanAnfFastPath(
-            const WorkItem &item, OrchestratorContext &ctx,
-            const std::vector< std::string > &active_vars, const std::vector< uint64_t > &sig,
-            std::unique_ptr< Expr > expr
-        ) {
+        PassResult EmitBooleanAnfFastPath(const WorkItem &item, OrchestratorContext &ctx,
+                                          const cobra::BudgetVector< std::string > &active_vars,
+                                          const cobra::BudgetVector< uint64_t > &sig,
+                                          std::unique_ptr< Expr > expr) {
             bool needs_osv = NeedsOriginalSpaceVerification(item);
 
             // Grouped items submit directly into the competition group and
@@ -101,18 +100,16 @@ namespace cobra {
             if (item.group_id.has_value()) {
                 auto normalized = NormalizeLateCandidateExpr(std::move(expr), ctx.bitwidth);
                 auto cost_info  = ComputeCost(*normalized);
-                SubmitCandidate(
-                    ctx.competition_groups, *item.group_id,
-                    CandidateRecord{
-                        .expr                              = std::move(normalized),
-                        .cost                              = cost_info.cost,
-                        .verification                      = VerificationState::kVerified,
-                        .real_vars                         = active_vars,
-                        .source_pass                       = PassId::kBuildSignatureState,
-                        .needs_original_space_verification = needs_osv,
-                        .sig_vector                        = sig,
-                    }
-                );
+                SubmitCandidate(ctx.competition_groups, *item.group_id,
+                                CandidateRecord{
+                                    .expr         = std::move(normalized),
+                                    .cost         = cost_info.cost,
+                                    .verification = VerificationState::kVerified,
+                                    .real_vars    = active_vars,
+                                    .source_pass  = PassId::kBuildSignatureState,
+                                    .needs_original_space_verification = needs_osv,
+                                    .sig_vector                        = sig,
+                                });
                 return PassResult{
                     .decision    = PassDecision::kAdvance,
                     .disposition = ItemDisposition::kRetainCurrent,
@@ -144,11 +141,11 @@ namespace cobra {
             return result;
         }
 
-        std::optional< PassResult > TryBooleanAnfFastPath(
-            const WorkItem &item, OrchestratorContext &ctx,
-            const std::vector< std::string > &active_vars,
-            const std::optional< Evaluator > &active_eval, const std::vector< uint64_t > &sig
-        ) {
+        std::optional< PassResult >
+        TryBooleanAnfFastPath(const WorkItem &item, OrchestratorContext &ctx,
+                              const cobra::BudgetVector< std::string > &active_vars,
+                              const std::optional< Evaluator > &active_eval,
+                              const cobra::BudgetVector< uint64_t > &sig) {
             const auto num_vars = static_cast< uint32_t >(active_vars.size());
             if (!IsBooleanValued(sig) || num_vars > ctx.opts.max_vars || !active_eval) {
                 return std::nullopt;
@@ -170,19 +167,18 @@ namespace cobra {
             return EmitBooleanAnfFastPath(item, ctx, active_vars, sig, std::move(repaired));
         }
 
-        std::optional< PassResult > TryReducedPolynomialSeedCandidate(
-            const WorkItem &item, OrchestratorContext &ctx,
-            const std::vector< std::string > &active_vars,
-            const std::optional< Evaluator > &active_eval, const WorkItem &sig_seed
-        ) {
+        std::optional< PassResult >
+        TryReducedPolynomialSeedCandidate(const WorkItem &item, OrchestratorContext &ctx,
+                                          const cobra::BudgetVector< std::string > &active_vars,
+                                          const std::optional< Evaluator > &active_eval,
+                                          const WorkItem &sig_seed) {
             auto fast_candidate = TryReducedPolynomialFastPath(sig_seed, ctx);
             if (!fast_candidate.has_value()) { return std::nullopt; }
 
             if (fast_candidate->needs_original_space_verification && active_eval.has_value()) {
                 auto check = internal::VerifyInOriginalSpace(
                     *active_eval, active_vars, fast_candidate->real_vars, *fast_candidate->expr,
-                    ctx.bitwidth
-                );
+                    ctx.bitwidth);
                 if (!check.passed) { return std::nullopt; }
 
                 fast_candidate->verification = VerificationState::kVerified;
@@ -241,6 +237,7 @@ namespace cobra {
                 }
             }
             for (const auto &child : root.children) {
+                ::cobra::budget::Checkpoint();
                 auto result = FindFirstOperandSite(*child);
                 if (result.has_value()) { return result; }
             }
@@ -267,6 +264,7 @@ namespace cobra {
                 }
             }
             for (const auto &child : root.children) {
+                ::cobra::budget::Checkpoint();
                 auto result = FindFirstProductSite(*child);
                 if (result.has_value()) { return result; }
             }
@@ -275,15 +273,15 @@ namespace cobra {
 
         struct ProductAssignment
         {
-            std::vector< uint64_t > sig_x;
-            std::vector< uint64_t > sig_y;
+            cobra::BudgetVector< uint64_t > sig_x;
+            cobra::BudgetVector< uint64_t > sig_y;
             size_t i = 0;
             size_t l = 0;
             size_t r = 0;
         };
 
-        std::unique_ptr< Expr >
-        ReconstructMaskedProductFactor(const Expr &inclusive_term, const Expr &exclusive_term) {
+        std::unique_ptr< Expr > ReconstructMaskedProductFactor(const Expr &inclusive_term,
+                                                               const Expr &exclusive_term) {
             if (inclusive_term.kind != Expr::Kind::kAnd
                 || exclusive_term.kind != Expr::Kind::kAnd
                 || inclusive_term.children.size() != 2 || exclusive_term.children.size() != 2)
@@ -292,7 +290,9 @@ namespace cobra {
             }
 
             for (const auto &lhs_child : inclusive_term.children) {
+                ::cobra::budget::Checkpoint();
                 for (const auto &rhs_child : exclusive_term.children) {
+                    ::cobra::budget::Checkpoint();
                     if (ExprStructurallyEqual(*lhs_child, *rhs_child)) {
                         return CloneExpr(*lhs_child);
                     }
@@ -302,10 +302,9 @@ namespace cobra {
             return nullptr;
         }
 
-        std::vector< ProductAssignment > EnumerateValidAssignments(
-            const Expr &add_node, uint32_t num_vars, uint32_t bitwidth,
-            uint32_t max_assignments = 4
-        ) {
+        cobra::BudgetVector< ProductAssignment >
+        EnumerateValidAssignments(const Expr &add_node, uint32_t num_vars, uint32_t bitwidth,
+                                  uint32_t max_assignments = 4) {
             const auto sig_len  = size_t{ 1 } << num_vars;
             const uint64_t mask = Bitmask(bitwidth);
 
@@ -316,15 +315,14 @@ namespace cobra {
                 add_node.children[1]->children[1].get(),
             };
 
-            std::array< std::vector< uint64_t >, 4 > sigs;
+            std::array< cobra::BudgetVector< uint64_t >, 4 > sigs;
             for (size_t i = 0; i < 4; ++i) {
+                ::cobra::budget::Checkpoint();
                 sigs[i] = EvaluateBooleanSignature(*factors[i], num_vars, bitwidth);
             }
 
             struct Roles
-            {
-                size_t i, o, l, r;
-            };
+            { size_t i, o, l, r; };
 
             static constexpr Roles kAssignments[8] = {
                 { .i = 0, .o = 1, .l = 2, .r = 3 },
@@ -337,11 +335,12 @@ namespace cobra {
                 { .i = 3, .o = 2, .l = 1, .r = 0 },
             };
 
-            std::vector< ProductAssignment > out;
-            std::vector< uint64_t > sig_x(sig_len);
-            std::vector< uint64_t > sig_y(sig_len);
+            cobra::BudgetVector< ProductAssignment > out;
+            cobra::BudgetVector< uint64_t > sig_x(sig_len);
+            cobra::BudgetVector< uint64_t > sig_y(sig_len);
 
             for (const auto &a : kAssignments) {
+                ::cobra::budget::Checkpoint();
                 const auto &sig_i = sigs[a.i];
                 const auto &sig_o = sigs[a.o];
                 const auto &sig_l = sigs[a.l];
@@ -349,6 +348,7 @@ namespace cobra {
 
                 bool ok = true;
                 for (size_t j = 0; j < sig_len; ++j) {
+                    ::cobra::budget::Checkpoint();
                     const uint64_t mi = sig_i[j] & mask;
                     const uint64_t mo = sig_o[j] & mask;
                     const uint64_t ml = sig_l[j] & mask;
@@ -365,19 +365,18 @@ namespace cobra {
                 if (!ok) { continue; }
 
                 for (size_t j = 0; j < sig_len; ++j) {
+                    ::cobra::budget::Checkpoint();
                     sig_x[j] = (sig_i[j] | sig_l[j]) & mask;
                     sig_y[j] = (sig_i[j] | sig_r[j]) & mask;
                 }
 
-                out.push_back(
-                    ProductAssignment{
-                        .sig_x = sig_x,
-                        .sig_y = sig_y,
-                        .i     = a.i,
-                        .l     = a.l,
-                        .r     = a.r,
-                    }
-                );
+                out.push_back(ProductAssignment{
+                    .sig_x = sig_x,
+                    .sig_y = sig_y,
+                    .i     = a.i,
+                    .l     = a.l,
+                    .r     = a.r,
+                });
                 if (out.size() >= max_assignments) { break; }
             }
 
@@ -403,12 +402,10 @@ namespace cobra {
         }
 
         if (!internal::HasNotOverArith(*ast.expr)) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         auto lowered = internal::LowerNotOverArith(CloneExpr(*ast.expr), ctx.bitwidth);
@@ -476,8 +473,8 @@ namespace cobra {
         return Ok(std::move(result));
     }
 
-    Result< PassResult >
-    RunBuildSignatureState(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunBuildSignatureState(const WorkItem &item,
+                                                OrchestratorContext &ctx) {
         COBRA_ZONE_N("RunBuildSignatureState");
         if (!IsAstKind(item)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
@@ -523,8 +520,7 @@ namespace cobra {
             return Err< PassResult >(
                 CobraError::kTooManyVariables,
                 "Variable count after elimination (" + std::to_string(real_var_count)
-                    + ") exceeds max_vars (" + std::to_string(ctx.opts.max_vars) + ")"
-            );
+                    + ") exceeds max_vars (" + std::to_string(ctx.opts.max_vars) + ")");
         }
 
         // Step 6: Build original_indices
@@ -560,9 +556,8 @@ namespace cobra {
         }
 
         // Step 8: Direct reduced polynomial shortcut.
-        if (auto fast_path = TryReducedPolynomialSeedCandidate(
-                item, ctx, active_vars, active_eval, sig_seed
-            ))
+        if (auto fast_path = TryReducedPolynomialSeedCandidate(item, ctx, active_vars,
+                                                               active_eval, sig_seed))
         {
             return Ok(std::move(*fast_path));
         }
@@ -599,12 +594,10 @@ namespace cobra {
 
         auto site = FindFirstOperandSite(*ast.expr);
         if (!site.has_value()) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         const auto &active_vars = ActiveAstVars(item, ctx);
@@ -652,7 +645,7 @@ namespace cobra {
                 .role    = role,
             };
 
-            std::vector< uint32_t > indices(num_vars);
+            cobra::BudgetVector< uint32_t > indices(num_vars);
             std::iota(indices.begin(), indices.end(), 0U);
 
             WorkItem child;
@@ -689,8 +682,8 @@ namespace cobra {
         return Ok(std::move(result));
     }
 
-    Result< PassResult >
-    RunProductIdentityCollapse(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunProductIdentityCollapse(const WorkItem &item,
+                                                    OrchestratorContext &ctx) {
         if (!IsAstKind(item)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
         }
@@ -698,12 +691,10 @@ namespace cobra {
 
         auto site = FindFirstProductSite(*ast.expr);
         if (!site.has_value()) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         const auto &active_vars = ActiveAstVars(item, ctx);
@@ -711,12 +702,10 @@ namespace cobra {
 
         auto assignments = EnumerateValidAssignments(*site->add_node, num_vars, ctx.bitwidth);
         if (assignments.empty()) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         auto baseline_cost     = ComputeCost(*site->add_node).cost;
@@ -729,6 +718,7 @@ namespace cobra {
         std::unique_ptr< Expr > best_direct_candidate;
         std::optional< ExprCost > best_direct_cost;
         for (const auto &assign : assignments) {
+            ::cobra::budget::Checkpoint();
             auto direct_x =
                 ReconstructMaskedProductFactor(*factors[assign.i], *factors[assign.l]);
             auto direct_y =
@@ -752,10 +742,9 @@ namespace cobra {
 
         if (best_direct_candidate) {
             bool replaced    = false;
-            auto rebuilt_ast = ReplaceByHash(
-                CloneExpr(*ast.expr), site->add_hash, best_direct_candidate, replaced
-            );
-            auto new_cls = ClassifyStructural(*rebuilt_ast);
+            auto rebuilt_ast = ReplaceByHash(CloneExpr(*ast.expr), site->add_hash,
+                                             best_direct_candidate, replaced);
+            auto new_cls     = ClassifyStructural(*rebuilt_ast);
 
             WorkItem rewritten;
             rewritten.payload = AstPayload{
@@ -785,10 +774,11 @@ namespace cobra {
         result.decision    = PassDecision::kAdvance;
         result.disposition = ItemDisposition::kConsumeCurrent;
 
-        std::vector< uint32_t > indices(num_vars);
+        cobra::BudgetVector< uint32_t > indices(num_vars);
         std::iota(indices.begin(), indices.end(), 0U);
 
         for (const auto &assign : assignments) {
+            ::cobra::budget::Checkpoint();
             ProductJoinState join;
             join.original_expr   = CloneExpr(*site->add_node);
             join.baseline_cost   = baseline_cost;
@@ -881,18 +871,16 @@ namespace cobra {
         auto rw = RewriteMixedProducts(CloneExpr(*ast.expr), rw_opts);
 
         if (!rw.structure_changed) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kBlocked,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                    .reason =
-                        ReasonDetail{
-                                     .top = { .code    = { ReasonCategory::kSearchExhausted,
-                                                  ReasonDomain::kStructuralTransform },
-                                     .message = "No rewrite applied" },
-                                     },
-            }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kBlocked,
+                .disposition = ItemDisposition::kRetainCurrent,
+                .reason =
+                    ReasonDetail{
+                                 .top = { .code    = { ReasonCategory::kSearchExhausted,
+                                              ReasonDomain::kStructuralTransform },
+                                 .message = "No rewrite applied" },
+                                 },
+            });
         }
 
         auto new_cls = ClassifyStructural(*rw.expr);
@@ -900,19 +888,16 @@ namespace cobra {
         // Still has unrecovered mixed structure after rewrite:
         // short-circuit with kRepresentationGap so parity is preserved.
         if (NeedsStructuralRecovery(new_cls.flags)) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kBlocked,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                    .reason =
-                        ReasonDetail{
-                                     .top = { .code = { ReasonCategory::kRepresentationGap,
-                                               ReasonDomain::kStructuralTransform },
-                                     .message =
-                                         "Rewrite did not reduce to supported structure" },
-                                     },
-            }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kBlocked,
+                .disposition = ItemDisposition::kRetainCurrent,
+                .reason =
+                    ReasonDetail{
+                                 .top = { .code    = { ReasonCategory::kRepresentationGap,
+                                              ReasonDomain::kStructuralTransform },
+                                 .message = "Rewrite did not reduce to supported structure" },
+                                 },
+            });
         }
 
         WorkItem rewritten;
@@ -944,8 +929,8 @@ namespace cobra {
     // Lifting passes
     // ---------------------------------------------------------------
 
-    Result< PassResult >
-    RunPrepareLiftedOuterSolve(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunPrepareLiftedOuterSolve(const WorkItem &item,
+                                                    OrchestratorContext &ctx) {
         COBRA_ZONE_N("RunPrepareLiftedOuterSolve");
         auto *skel = std::get_if< LiftedSkeletonPayload >(&item.payload);
         if (skel == nullptr) {
@@ -959,15 +944,14 @@ namespace cobra {
         LiftedSubstituteCont cont;
         cont.bindings.reserve(skel->bindings.size());
         for (const auto &b : skel->bindings) {
-            cont.bindings.push_back(
-                LiftedBinding{
-                    .kind             = b.kind,
-                    .outer_var_index  = b.outer_var_index,
-                    .subtree          = CloneExpr(*b.subtree),
-                    .structural_hash  = b.structural_hash,
-                    .original_support = b.original_support,
-                }
-            );
+            ::cobra::budget::Checkpoint();
+            cont.bindings.push_back(LiftedBinding{
+                .kind             = b.kind,
+                .outer_var_index  = b.outer_var_index,
+                .subtree          = CloneExpr(*b.subtree),
+                .structural_hash  = b.structural_hash,
+                .original_support = b.original_support,
+            });
         }
         cont.outer_vars         = skel->outer_ctx.vars;
         cont.original_var_count = skel->original_var_count;
@@ -1023,8 +1007,8 @@ namespace cobra {
     // Pass registry
     // ---------------------------------------------------------------
 
-    const std::vector< PassDescriptor > &GetPassRegistry() {
-        static const std::vector< PassDescriptor > kRegistry = {
+    const cobra::BudgetVector< PassDescriptor > &GetPassRegistry() {
+        static const cobra::BudgetVector< PassDescriptor > kRegistry = {
             {
              .id         = PassId::kLowerNotOverArith,
              .consumes   = StateKind::kFoldedAst,
@@ -1344,24 +1328,24 @@ namespace cobra {
     // ActiveAst helpers
     // ---------------------------------------------------------------
 
-    const std::vector< std::string > &
-    ActiveAstVars(const WorkItem &item, const OrchestratorContext &ctx) {
+    const cobra::BudgetVector< std::string > &ActiveAstVars(const WorkItem &item,
+                                                            const OrchestratorContext &ctx) {
         if (auto *ast = std::get_if< AstPayload >(&item.payload)) {
             if (ast->solve_ctx.has_value()) { return ast->solve_ctx->vars; }
         }
         return ctx.original_vars;
     }
 
-    const std::optional< Evaluator > &
-    ActiveAstEvaluator(const WorkItem &item, const OrchestratorContext &ctx) {
+    const std::optional< Evaluator > &ActiveAstEvaluator(const WorkItem &item,
+                                                         const OrchestratorContext &ctx) {
         if (auto *ast = std::get_if< AstPayload >(&item.payload)) {
             if (ast->solve_ctx.has_value()) { return ast->solve_ctx->evaluator; }
         }
         return ctx.evaluator;
     }
 
-    const std::vector< uint64_t > *
-    ActiveAstInputSig(const WorkItem &item, const OrchestratorContext &ctx) {
+    const cobra::BudgetVector< uint64_t > *ActiveAstInputSig(const WorkItem &item,
+                                                             const OrchestratorContext &ctx) {
         if (auto *ast = std::get_if< AstPayload >(&item.payload)) {
             if (ast->solve_ctx.has_value() && !ast->solve_ctx->input_sig.empty()) {
                 return &ast->solve_ctx->input_sig;

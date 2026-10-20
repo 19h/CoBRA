@@ -1,5 +1,6 @@
 #include "cobra/core/Classifier.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Classification.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/ExprUtils.h"
@@ -24,10 +25,10 @@ namespace cobra {
                 || kind == Expr::Kind::kNeg;
         }
 
-        std::unique_ptr< Expr > TryFoldBinaryBitwise(
-            Expr::Kind kind, std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs,
-            uint32_t bitwidth
-        ) {
+        std::unique_ptr< Expr > TryFoldBinaryBitwise(Expr::Kind kind,
+                                                     std::unique_ptr< Expr > lhs,
+                                                     std::unique_ptr< Expr > rhs,
+                                                     uint32_t bitwidth) {
             const uint64_t kMask = Bitmask(bitwidth);
 
             const bool kLhsConst = (lhs->kind == Expr::Kind::kConstant);
@@ -92,15 +93,16 @@ namespace cobra {
 
     } // namespace
 
-    std::unique_ptr< Expr > FoldConstantBitwise(
-        std::unique_ptr< Expr > expr, uint32_t bitwidth
-    ) { // NOLINT(readability-identifier-naming)
+    std::unique_ptr< Expr >
+    FoldConstantBitwise(std::unique_ptr< Expr > expr,
+                        uint32_t bitwidth) { // NOLINT(readability-identifier-naming)
         if (expr->kind == Expr::Kind::kConstant || expr->kind == Expr::Kind::kVariable) {
             return expr;
         }
 
         // Recurse into all children first (bottom-up)
         for (auto &child : expr->children) {
+            ::cobra::budget::Checkpoint();
             child = FoldConstantBitwise(std::move(child), bitwidth);
         }
 
@@ -119,9 +121,8 @@ namespace cobra {
         if (IsBitwise(expr->kind) && IsConstantSubtree(*expr)) {
             const uint64_t val =
                 EvalConstantExpr(*expr, bitwidth); // NOLINT(readability-identifier-naming)
-            COBRA_TRACE(
-                "Classifier", "FoldConstantBitwise: folded constant subtree to val={}", val
-            );
+            COBRA_TRACE("Classifier", "FoldConstantBitwise: folded constant subtree to val={}",
+                        val);
             return Expr::Constant(val);
         }
 
@@ -129,9 +130,8 @@ namespace cobra {
         if (expr->kind == Expr::Kind::kNot) { return expr; }
 
         // Binary bitwise: try identity folds
-        return TryFoldBinaryBitwise(
-            expr->kind, std::move(expr->children[0]), std::move(expr->children[1]), bitwidth
-        );
+        return TryFoldBinaryBitwise(expr->kind, std::move(expr->children[0]),
+                                    std::move(expr->children[1]), bitwidth);
     }
 
     namespace {
@@ -189,8 +189,7 @@ namespace cobra {
                     info.max_var_degree = std::max(lhs.max_var_degree, rhs.max_var_degree);
                     if (kOverlap) {
                         info.max_var_degree = static_cast< uint8_t >(
-                            std::min< int >(info.max_var_degree + 1, 255)
-                        );
+                            std::min< int >(info.max_var_degree + 1, 255));
                     }
 
                     // Mixed-product detection (independent of product-type)
@@ -205,11 +204,10 @@ namespace cobra {
                         info.flags |= kSfHasArithOverBitwise;
                     }
 
-                    COBRA_TRACE(
-                        "Classifier",
-                        "ClassifyNode: Mul var_mask=0x{:x} max_degree={} flags=0x{:x}",
-                        info.var_mask, info.max_var_degree, static_cast< uint32_t >(info.flags)
-                    );
+                    COBRA_TRACE("Classifier",
+                                "ClassifyNode: Mul var_mask=0x{:x} max_degree={} flags=0x{:x}",
+                                info.var_mask, info.max_var_degree,
+                                static_cast< uint32_t >(info.flags));
 
                     // Product-type classification
                     if (lhs.has_var_dep && rhs.has_var_dep) {
@@ -386,10 +384,8 @@ namespace cobra {
             sem = SemanticClass::kSemilinear;
         }
 
-        COBRA_TRACE(
-            "Classifier", "ClassifyStructural: semantic={} flags=0x{:x}",
-            static_cast< int >(sem), static_cast< uint32_t >(info.flags)
-        );
+        COBRA_TRACE("Classifier", "ClassifyStructural: semantic={} flags=0x{:x}",
+                    static_cast< int >(sem), static_cast< uint32_t >(info.flags));
         return { .semantic = sem, .flags = info.flags };
     }
 

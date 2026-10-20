@@ -1,4 +1,5 @@
 #include "cobra/core/PassContract.h"
+#include "cobra/core/Budget.h"
 
 #include <cstdlib>
 #include <utility>
@@ -16,10 +17,9 @@ namespace cobra {
 
     PassOutcome::PassOutcome(OutcomeKind kind) : kind_(kind) {}
 
-    PassOutcome PassOutcome::Success(
-        std::unique_ptr< Expr > expr, std::vector< std::string > real_vars,
-        VerificationState verification
-    ) {
+    PassOutcome PassOutcome::Success(std::unique_ptr< Expr > expr,
+                                     cobra::BudgetVector< std::string > real_vars,
+                                     VerificationState verification) {
         PassOutcome o(OutcomeKind::kSuccess);
         o.expr_         = std::move(expr);
         o.real_vars_    = std::move(real_vars);
@@ -43,7 +43,7 @@ namespace cobra {
         return std::move(expr_);
     }
 
-    const std::vector< std::string > &PassOutcome::RealVars() const {
+    const cobra::BudgetVector< std::string > &PassOutcome::RealVars() const {
         if (kind_ != OutcomeKind::kSuccess) { ContractAbort(); }
         return real_vars_;
     }
@@ -58,9 +58,13 @@ namespace cobra {
         return *reason_;
     }
 
-    const std::vector< uint64_t > &PassOutcome::SigVector() const { return sig_vector_; }
+    const cobra::BudgetVector< uint64_t > &PassOutcome::SigVector() const {
+        return sig_vector_;
+    }
 
-    void PassOutcome::SetSigVector(std::vector< uint64_t > sv) { sig_vector_ = std::move(sv); }
+    void PassOutcome::SetSigVector(cobra::BudgetVector< uint64_t > sv) {
+        sig_vector_ = std::move(sv);
+    }
 
     const std::optional< DecompositionMeta > &PassOutcome::DecompositionMetadata() const {
         return decomposition_meta_;

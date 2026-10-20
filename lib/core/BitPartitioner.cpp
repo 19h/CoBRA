@@ -1,4 +1,5 @@
 #include "cobra/core/BitPartitioner.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/SemilinearIR.h"
 #include "cobra/core/Trace.h"
@@ -17,9 +18,12 @@ namespace cobra {
 
         struct ProfileHash
         {
-            size_t operator()(const std::vector< AtomSemanticId > &v) const {
+            size_t operator()(const cobra::BudgetVector< AtomSemanticId > &v) const {
                 size_t h = std::hash< size_t >{}(v.size());
-                for (auto id : v) { h = detail::hash_combine(h, std::hash< uint64_t >{}(id)); }
+                for (auto id : v) {
+                    ::cobra::budget::Checkpoint();
+                    h = detail::hash_combine(h, std::hash< uint64_t >{}(id));
+                }
                 return h;
             }
         };
@@ -28,44 +32,37 @@ namespace cobra {
         /// Constants are reduced to their bit at position `b`.
         /// Variables are looked up from the Boolean assignment.
         /// All arithmetic is 1-bit (AND/OR/XOR/NOT over {0,1}).
-        uint64_t EvalAtomAtBitImpl(
-            const Expr &e, const std::vector< GlobalVarIdx > &support, uint64_t assignment,
-            uint32_t bit_pos, uint32_t bitwidth
-        ) {
+        uint64_t EvalAtomAtBitImpl(const Expr &e,
+                                   const cobra::BudgetVector< GlobalVarIdx > &support,
+                                   uint64_t assignment, uint32_t bit_pos, uint32_t bitwidth) {
             switch (e.kind) {
                 case Expr::Kind::kConstant:
                     return (e.constant_val >> bit_pos) & 1;
                 case Expr::Kind::kVariable: {
                     for (size_t i = 0; i < support.size(); ++i) {
+                        ::cobra::budget::Checkpoint();
                         if (support[i] == e.var_index) { return (assignment >> i) & 1; }
                     }
                     return 0;
                 }
                 case Expr::Kind::kAnd:
-                    return EvalAtomAtBitImpl(
-                               *e.children[0], support, assignment, bit_pos, bitwidth
-                           )
-                        & EvalAtomAtBitImpl(
-                               *e.children[1], support, assignment, bit_pos, bitwidth
-                        );
+                    return EvalAtomAtBitImpl(*e.children[0], support, assignment, bit_pos,
+                                             bitwidth)
+                        & EvalAtomAtBitImpl(*e.children[1], support, assignment, bit_pos,
+                                            bitwidth);
                 case Expr::Kind::kOr:
-                    return EvalAtomAtBitImpl(
-                               *e.children[0], support, assignment, bit_pos, bitwidth
-                           )
-                        | EvalAtomAtBitImpl(
-                               *e.children[1], support, assignment, bit_pos, bitwidth
-                        );
+                    return EvalAtomAtBitImpl(*e.children[0], support, assignment, bit_pos,
+                                             bitwidth)
+                        | EvalAtomAtBitImpl(*e.children[1], support, assignment, bit_pos,
+                                            bitwidth);
                 case Expr::Kind::kXor:
-                    return EvalAtomAtBitImpl(
-                               *e.children[0], support, assignment, bit_pos, bitwidth
-                           )
-                        ^ EvalAtomAtBitImpl(
-                               *e.children[1], support, assignment, bit_pos, bitwidth
-                        );
+                    return EvalAtomAtBitImpl(*e.children[0], support, assignment, bit_pos,
+                                             bitwidth)
+                        ^ EvalAtomAtBitImpl(*e.children[1], support, assignment, bit_pos,
+                                            bitwidth);
                 case Expr::Kind::kNot:
-                    return EvalAtomAtBitImpl(
-                               *e.children[0], support, assignment, bit_pos, bitwidth
-                           )
+                    return EvalAtomAtBitImpl(*e.children[0], support, assignment, bit_pos,
+                                             bitwidth)
                         ^ 1;
                 case Expr::Kind::kShr: {
                     // Check the uint64 constant_val against bitwidth BEFORE
@@ -76,9 +73,8 @@ namespace cobra {
                     if (e.constant_val >= bitwidth) { return 0; }
                     const uint32_t kSrc = bit_pos + static_cast< uint32_t >(e.constant_val);
                     if (kSrc >= bitwidth) { return 0; }
-                    return EvalAtomAtBitImpl(
-                        *e.children[0], support, assignment, kSrc, bitwidth
-                    );
+                    return EvalAtomAtBitImpl(*e.children[0], support, assignment, kSrc,
+                                             bitwidth);
                 }
                 case Expr::Kind::kAdd:
                 case Expr::Kind::kMul:
@@ -91,14 +87,14 @@ namespace cobra {
         /// Build the 1-bit truth table for an atom at a specific
         /// bit position. Returns a packed uint64_t where bit i holds
         /// the atom's single-bit output for Boolean assignment i.
-        uint64_t EvalAtomAtBit(
-            const Expr &atom, const std::vector< GlobalVarIdx > &support, uint32_t bit_pos,
-            uint32_t bitwidth
-        ) {
+        uint64_t EvalAtomAtBit(const Expr &atom,
+                               const cobra::BudgetVector< GlobalVarIdx > &support,
+                               uint32_t bit_pos, uint32_t bitwidth) {
             const size_t kN   = support.size();
             const size_t kLen = size_t{ 1 } << kN;
             uint64_t packed   = 0;
             for (size_t i = 0; i < kLen; ++i) {
+                ::cobra::budget::Checkpoint();
                 const uint64_t kVal  = EvalAtomAtBitImpl(atom, support, i, bit_pos, bitwidth);
                 packed              |= (kVal & 1) << i;
             }
@@ -107,7 +103,7 @@ namespace cobra {
 
     } // namespace
 
-    std::vector< PartitionClass > ComputePartitions(const SemilinearIR &ir) {
+    cobra::BudgetVector< PartitionClass > ComputePartitions(const SemilinearIR &ir) {
         COBRA_TRACE("BitPartitioner", "ComputePartitions: atoms={}", ir.atom_table.size());
         if (ir.atom_table.empty()) { return {}; }
 
@@ -122,8 +118,9 @@ namespace cobra {
             uint64_t sentinel = 0;
         };
 
-        std::vector< AtomMeta > meta(kAtomCount);
+        cobra::BudgetVector< AtomMeta > meta(kAtomCount);
         for (size_t a = 0; a < kAtomCount; ++a) {
+            ::cobra::budget::Checkpoint();
             if (ir.atom_table[a].key.support.size() > 5) {
                 meta[a].opaque   = true;
                 meta[a].sentinel = kOpaqueSentinelBase | a;
@@ -131,13 +128,15 @@ namespace cobra {
         }
 
         // Group bit positions by their profile vectors.
-        std::unordered_map< std::vector< AtomSemanticId >, uint64_t, ProfileHash >
+        cobra::BudgetMap< cobra::BudgetVector< AtomSemanticId >, uint64_t, ProfileHash >
             profile_to_mask;
 
-        std::vector< AtomSemanticId > profile(kAtomCount);
+        cobra::BudgetVector< AtomSemanticId > profile(kAtomCount);
 
         for (uint32_t b = 0; b < ir.bitwidth; ++b) {
+            ::cobra::budget::Checkpoint();
             for (size_t a = 0; a < kAtomCount; ++a) {
+                ::cobra::budget::Checkpoint();
                 if (meta[a].opaque) {
                     profile[a] = meta[a].sentinel;
                 } else {
@@ -149,9 +148,10 @@ namespace cobra {
             profile_to_mask[profile] |= (1ULL << b);
         }
 
-        std::vector< PartitionClass > result;
+        cobra::BudgetVector< PartitionClass > result;
         result.reserve(profile_to_mask.size());
         for (auto &[prof, mask] : profile_to_mask) {
+            ::cobra::budget::Checkpoint();
             result.push_back({ .mask = mask, .profile = prof });
         }
         COBRA_TRACE("BitPartitioner", "ComputePartitions: partitions={}", result.size());

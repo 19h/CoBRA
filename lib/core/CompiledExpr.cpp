@@ -1,5 +1,6 @@
 #include "cobra/core/CompiledExpr.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -30,12 +31,13 @@ namespace cobra {
             .program    = {},
         };
 
-        std::vector< CompileFrame > frames;
+        cobra::BudgetVector< CompileFrame > frames;
         frames.reserve(64);
         compiled.program.reserve(64);
         frames.push_back({ .node = &expr, .emit = false });
 
         while (!frames.empty()) {
+            ::cobra::budget::Checkpoint();
             const CompileFrame frame = frames.back();
             frames.pop_back();
 
@@ -48,14 +50,12 @@ namespace cobra {
             switch (node.kind) {
                 case Expr::Kind::kConstant:
                     compiled.program.push_back(
-                        { .kind = node.kind, .operand = node.constant_val & compiled.mask }
-                    );
+                        { .kind = node.kind, .operand = node.constant_val & compiled.mask });
                     break;
                 case Expr::Kind::kVariable:
                     compiled.arity = std::max(compiled.arity, node.var_index + 1);
                     compiled.program.push_back(
-                        { .kind = node.kind, .operand = node.var_index }
-                    );
+                        { .kind = node.kind, .operand = node.var_index });
                     break;
                 case Expr::Kind::kNot:
                 case Expr::Kind::kNeg:
@@ -78,6 +78,7 @@ namespace cobra {
         size_t depth     = 0;
         size_t max_depth = 0;
         for (const auto &instr : compiled.program) {
+            ::cobra::budget::Checkpoint();
             switch (instr.kind) {
                 case Expr::Kind::kConstant:
                 case Expr::Kind::kVariable:
@@ -101,14 +102,14 @@ namespace cobra {
         return compiled;
     }
 
-    uint64_t EvalCompiledExpr(
-        const CompiledExpr &compiled, const std::vector< uint64_t > &var_values,
-        std::vector< uint64_t > &stack
-    ) {
+    uint64_t EvalCompiledExpr(const CompiledExpr &compiled,
+                              const cobra::BudgetVector< uint64_t > &var_values,
+                              cobra::BudgetVector< uint64_t > &stack) {
         if (stack.size() < compiled.stack_size) { stack.resize(compiled.stack_size); }
 
         size_t sp = 0;
         for (const auto &instr : compiled.program) {
+            ::cobra::budget::Checkpoint();
             switch (instr.kind) {
                 case Expr::Kind::kConstant:
                     stack[sp++] = instr.operand;

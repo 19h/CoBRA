@@ -1,14 +1,13 @@
 #include "CompetitionGroup.h"
 #include "Orchestrator.h"
+#include "cobra/core/Budget.h"
 
 #include <cassert>
 
 namespace cobra {
 
-    GroupId CreateGroup(
-        absl::flat_hash_map< GroupId, CompetitionGroup > &groups, GroupId &next_id,
-        std::optional< ExprCost > baseline_cost
-    ) {
+    GroupId CreateGroup(cobra::BudgetFlatMap< GroupId, CompetitionGroup > &groups,
+                        GroupId &next_id, std::optional< ExprCost > baseline_cost) {
         GroupId id = next_id++;
         CompetitionGroup group;
         group.open_handles  = 1;
@@ -17,10 +16,8 @@ namespace cobra {
         return id;
     }
 
-    bool SubmitCandidate(
-        absl::flat_hash_map< GroupId, CompetitionGroup > &groups, GroupId group_id,
-        CandidateRecord record
-    ) {
+    bool SubmitCandidate(cobra::BudgetFlatMap< GroupId, CompetitionGroup > &groups,
+                         GroupId group_id, CandidateRecord record) {
         auto it = groups.find(group_id);
         // Parent group may already be resolved and erased in
         // fire-and-forget fanout — silently reject the submission.
@@ -44,18 +41,16 @@ namespace cobra {
         return false;
     }
 
-    bool
-    AcquireHandle(absl::flat_hash_map< GroupId, CompetitionGroup > &groups, GroupId group_id) {
+    bool AcquireHandle(cobra::BudgetFlatMap< GroupId, CompetitionGroup > &groups,
+                       GroupId group_id) {
         auto it = groups.find(group_id);
         if (it == groups.end()) { return false; }
         ++it->second.open_handles;
         return true;
     }
 
-    bool HasVerifiedCandidate(
-        const absl::flat_hash_map< GroupId, CompetitionGroup > &groups, GroupId group_id,
-        uint32_t max_weighted_size
-    ) {
+    bool HasVerifiedCandidate(const cobra::BudgetFlatMap< GroupId, CompetitionGroup > &groups,
+                              GroupId group_id, uint32_t max_weighted_size) {
         auto it = groups.find(group_id);
         if (it == groups.end()) { return false; }
         return it->second.best.has_value()
@@ -64,7 +59,7 @@ namespace cobra {
     }
 
     std::optional< WorkItem >
-    ReleaseHandle(absl::flat_hash_map< GroupId, CompetitionGroup > &groups, GroupId group_id) {
+    ReleaseHandle(cobra::BudgetFlatMap< GroupId, CompetitionGroup > &groups, GroupId group_id) {
         auto it = groups.find(group_id);
         // A child may finish after the parent group has already
         // resolved and been erased; treat the late release as a no-op.

@@ -3,6 +3,7 @@
 #include "cobra/core/AtomSimplifier.h"
 #include "cobra/core/BitPartitioner.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/ExprCost.h"
 #include "cobra/core/ExprUtils.h"
 #include "cobra/core/MaskedAtomReconstructor.h"
@@ -20,9 +21,8 @@ namespace cobra {
 
     namespace {
 
-        bool MatchAppliedCoefficient(
-            const Expr &expr, uint64_t coeff, uint32_t bitwidth, const Expr *&term
-        ) {
+        bool MatchAppliedCoefficient(const Expr &expr, uint64_t coeff, uint32_t bitwidth,
+                                     const Expr *&term) {
             if (coeff == 1) {
                 term = &expr;
                 return true;
@@ -52,14 +52,14 @@ namespace cobra {
             return false;
         }
 
-        bool MatchScaledAddTerm(
-            const Expr &expr, uint32_t bitwidth, const Expr *&term, uint64_t &coeff
-        ) {
+        bool MatchScaledAddTerm(const Expr &expr, uint32_t bitwidth, const Expr *&term,
+                                uint64_t &coeff) {
             if (expr.kind != Expr::Kind::kAdd || expr.children.size() != 2) { return false; }
 
             const Expr *const_node = nullptr;
             size_t const_idx       = 0;
             for (size_t i = 0; i < 2; ++i) {
+                ::cobra::budget::Checkpoint();
                 if (expr.children[i]->kind == Expr::Kind::kConstant) {
                     const_node = expr.children[i].get();
                     const_idx  = i;
@@ -69,9 +69,8 @@ namespace cobra {
             if (const_node == nullptr) { return false; }
 
             coeff = const_node->constant_val;
-            return MatchAppliedCoefficient(
-                *expr.children[1 - const_idx], coeff, bitwidth, term
-            );
+            return MatchAppliedCoefficient(*expr.children[1 - const_idx], coeff, bitwidth,
+                                           term);
         }
 
     } // namespace
@@ -83,6 +82,7 @@ namespace cobra {
         dst.terms    = src.terms;
         dst.atom_table.reserve(src.atom_table.size());
         for (const auto &info : src.atom_table) {
+            ::cobra::budget::Checkpoint();
             AtomInfo clone;
             clone.atom_id         = info.atom_id;
             clone.key             = info.key;
@@ -98,8 +98,8 @@ namespace cobra {
     // Rewrite k + k*(c^x) -> (-k)*(~c ^ x), and more generally
     // k + k*x -> (-k)*~x. The XOR-specialized form keeps the recovered
     // atom in its cheaper XOR-with-constant representation.
-    std::unique_ptr< Expr >
-    CanonicalizeScaledBooleanSum(std::unique_ptr< Expr > expr, uint32_t bitwidth) {
+    std::unique_ptr< Expr > CanonicalizeScaledBooleanSum(std::unique_ptr< Expr > expr,
+                                                         uint32_t bitwidth) {
         const Expr *term = nullptr;
         uint64_t coeff   = 0;
         if (!MatchScaledAddTerm(*expr, bitwidth, term, coeff) || coeff == 0) { return expr; }
@@ -129,14 +129,14 @@ namespace cobra {
         return ApplyCoefficient(std::move(complemented), ModNeg(coeff, bitwidth), bitwidth);
     }
 
-    std::unique_ptr< Expr >
-    NormalizeLateCandidateExpr(std::unique_ptr< Expr > expr, uint32_t bitwidth) {
+    std::unique_ptr< Expr > NormalizeLateCandidateExpr(std::unique_ptr< Expr > expr,
+                                                       uint32_t bitwidth) {
         expr = CanonicalizeScaledBooleanSum(std::move(expr), bitwidth);
         return SimplifyPatternSubtrees(std::move(expr), bitwidth);
     }
 
-    Result< PassResult >
-    RunSemilinearNormalize(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunSemilinearNormalize(const WorkItem &item,
+                                                OrchestratorContext &ctx) {
         COBRA_ZONE_N("RunSemilinearNormalize");
         if (!std::holds_alternative< AstPayload >(item.payload)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
@@ -144,20 +144,16 @@ namespace cobra {
         const auto &ast = std::get< AstPayload >(item.payload);
 
         if (ast.provenance == Provenance::kLowered) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNotApplicable,
-                    .disposition = ItemDisposition::kConsumeCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNotApplicable,
+                .disposition = ItemDisposition::kConsumeCurrent,
+            });
         }
         if (!ast.classification || ast.classification->semantic != SemanticClass::kSemilinear) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNotApplicable,
-                    .disposition = ItemDisposition::kConsumeCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNotApplicable,
+                .disposition = ItemDisposition::kConsumeCurrent,
+            });
         }
 
         const auto &active_vars = ActiveAstVars(item, ctx);
@@ -165,28 +161,24 @@ namespace cobra {
         const auto kNumVars     = static_cast< uint32_t >(active_vars.size());
 
         if (IsLinearShortcut(*ast.expr, kNumVars, ctx.bitwidth)) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNotApplicable,
-                    .disposition = ItemDisposition::kConsumeCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNotApplicable,
+                .disposition = ItemDisposition::kConsumeCurrent,
+            });
         }
 
         if (kNumVars > ctx.opts.max_vars) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNotApplicable,
-                    .disposition = ItemDisposition::kConsumeCurrent,
-                    .reason =
-                        ReasonDetail{
-                                     .top = { .code    = { ReasonCategory::kGuardFailed,
-                                                  ReasonDomain::kSemilinear,
-                                                  semilinear_pass::kTooManyVars },
-                                     .message = "too many variables for semilinear" },
-                                     },
-            }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNotApplicable,
+                .disposition = ItemDisposition::kConsumeCurrent,
+                .reason =
+                    ReasonDetail{
+                                 .top = { .code    = { ReasonCategory::kGuardFailed,
+                                              ReasonDomain::kSemilinear,
+                                              semilinear_pass::kTooManyVars },
+                                 .message = "too many variables for semilinear" },
+                                 },
+            });
         }
 
         auto ir_result = NormalizeToSemilinear(*ast.expr, active_vars, ctx.bitwidth);
@@ -199,13 +191,11 @@ namespace cobra {
                              "semilinear normalization failed: " + ir_result.error().message },
             };
             ctx.run_metadata.semilinear_failure = reason;
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kBlocked,
-                    .disposition = ItemDisposition::kConsumeCurrent,
-                    .reason      = std::move(reason),
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kBlocked,
+                .disposition = ItemDisposition::kConsumeCurrent,
+                .reason      = std::move(reason),
+            });
         }
 
         WorkItem next;
@@ -256,9 +246,8 @@ namespace cobra {
         auto plain = ReconstructMaskedAtoms(ir, {});
         auto check = SelfCheckSemilinear(ir, *plain, vars, ctx.bitwidth);
         if (!check.passed) {
-            COBRA_TRACE(
-                "Simplifier", "RunSemilinearCheck: self-check failed: {}", check.mismatch_detail
-            );
+            COBRA_TRACE("Simplifier", "RunSemilinearCheck: self-check failed: {}",
+                        check.mismatch_detail);
             ReasonDetail reason{
                 .top = { .code    = { ReasonCategory::kInternalInvariant,
                                       ReasonDomain::kSemilinear,
@@ -266,13 +255,11 @@ namespace cobra {
                         .message = "semilinear self-check failed" },
             };
             ctx.run_metadata.semilinear_failure = reason;
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kBlocked,
-                    .disposition = ItemDisposition::kConsumeCurrent,
-                    .reason      = std::move(reason),
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kBlocked,
+                .disposition = ItemDisposition::kConsumeCurrent,
+                .reason      = std::move(reason),
+            });
         }
 
         WorkItem next;
@@ -328,13 +315,11 @@ namespace cobra {
                             .message = "post-rewrite probe verification failed" },
                 };
                 ctx.run_metadata.semilinear_failure = reason;
-                return Ok(
-                    PassResult{
-                        .decision    = PassDecision::kBlocked,
-                        .disposition = ItemDisposition::kConsumeCurrent,
-                        .reason      = std::move(reason),
-                    }
-                );
+                return Ok(PassResult{
+                    .decision    = PassDecision::kBlocked,
+                    .disposition = ItemDisposition::kConsumeCurrent,
+                    .reason      = std::move(reason),
+                });
             }
         }
 
@@ -362,8 +347,8 @@ namespace cobra {
         return Ok(std::move(result));
     }
 
-    Result< PassResult >
-    RunSemilinearReconstruct(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunSemilinearReconstruct(const WorkItem &item,
+                                                  OrchestratorContext &ctx) {
         COBRA_ZONE_N("RunSemilinearReconstruct");
         if (!std::holds_alternative< RewrittenSemilinearPayload >(item.payload)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
@@ -386,22 +371,19 @@ namespace cobra {
             auto final_check =
                 FullWidthCheckEval(*local_eval, kNumVars, *simplified, ctx.bitwidth);
             if (!final_check.passed) {
-                COBRA_TRACE(
-                    "Simplifier", "RunSemilinearReconstruct: final verification failed"
-                );
+                COBRA_TRACE("Simplifier",
+                            "RunSemilinearReconstruct: final verification failed");
                 ReasonDetail reason{
                     .top = { .code = { ReasonCategory::kVerifyFailed, ReasonDomain::kSemilinear,
                                        semilinear_pass::kFinalVerifyFail },
                             .message = "final full-width verification failed" },
                 };
                 ctx.run_metadata.semilinear_failure = reason;
-                return Ok(
-                    PassResult{
-                        .decision    = PassDecision::kBlocked,
-                        .disposition = ItemDisposition::kConsumeCurrent,
-                        .reason      = std::move(reason),
-                    }
-                );
+                return Ok(PassResult{
+                    .decision    = PassDecision::kBlocked,
+                    .disposition = ItemDisposition::kConsumeCurrent,
+                    .reason      = std::move(reason),
+                });
             }
             verification = VerificationState::kVerified;
         }

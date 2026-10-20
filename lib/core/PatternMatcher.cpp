@@ -1,5 +1,6 @@
 #include "cobra/core/PatternMatcher.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/ExprCost.h"
 #include "cobra/core/ExprUtils.h"
@@ -22,12 +23,12 @@ namespace cobra {
         struct TwoVarBasisPattern
         {
             std::unique_ptr< Expr > expr;
-            std::vector< uint64_t > sig;
+            cobra::BudgetVector< uint64_t > sig;
         };
 
         std::optional< std::unique_ptr< Expr > > Match2varBoolean(uint8_t key);
 
-        void CollectSupport(const Expr &expr, std::vector< uint32_t > &support) {
+        void CollectSupport(const Expr &expr, cobra::BudgetVector< uint32_t > &support) {
             if (expr.kind == Expr::Kind::kVariable) {
                 if (std::find(support.begin(), support.end(), expr.var_index) == support.end())
                 {
@@ -35,32 +36,41 @@ namespace cobra {
                 }
                 return;
             }
-            for (const auto &child : expr.children) { CollectSupport(*child, support); }
+            for (const auto &child : expr.children) {
+                ::cobra::budget::Checkpoint();
+                CollectSupport(*child, support);
+            }
         }
 
-        void PushUniqueValue(std::vector< uint64_t > &values, uint64_t value) {
+        void PushUniqueValue(cobra::BudgetVector< uint64_t > &values, uint64_t value) {
             if (std::find(values.begin(), values.end(), value) == values.end()) {
                 values.push_back(value);
             }
         }
 
-        std::vector< uint64_t >
-        BuildCoefficientCandidates(const std::vector< uint64_t > &sig, uint32_t bitwidth) {
-            std::vector< uint64_t > coeffs;
+        cobra::BudgetVector< uint64_t >
+        BuildCoefficientCandidates(const cobra::BudgetVector< uint64_t > &sig,
+                                   uint32_t bitwidth) {
+            cobra::BudgetVector< uint64_t > coeffs;
             coeffs.reserve(1 + sig.size() + sig.size() * sig.size());
             coeffs.push_back(0);
-            for (uint64_t value : sig) { PushUniqueValue(coeffs, value); }
+            for (uint64_t value : sig) {
+                ::cobra::budget::Checkpoint();
+                PushUniqueValue(coeffs, value);
+            }
             for (uint64_t lhs : sig) {
+                ::cobra::budget::Checkpoint();
                 for (uint64_t rhs : sig) {
+                    ::cobra::budget::Checkpoint();
                     PushUniqueValue(coeffs, ModSub(lhs, rhs, bitwidth));
                 }
             }
             return coeffs;
         }
 
-        std::unique_ptr< Expr > BuildAffineBasisExpr(
-            uint64_t constant, std::unique_ptr< Expr > first, std::unique_ptr< Expr > second
-        ) {
+        std::unique_ptr< Expr > BuildAffineBasisExpr(uint64_t constant,
+                                                     std::unique_ptr< Expr > first,
+                                                     std::unique_ptr< Expr > second) {
             std::unique_ptr< Expr > result;
             if (constant != 0) { result = Expr::Constant(constant); }
             if (first) {
@@ -74,27 +84,26 @@ namespace cobra {
             return result ? std::move(result) : Expr::Constant(0);
         }
 
-        std::vector< TwoVarBasisPattern > BuildTwoVarBasisPatterns(uint32_t bitwidth) {
-            std::vector< TwoVarBasisPattern > patterns;
+        cobra::BudgetVector< TwoVarBasisPattern > BuildTwoVarBasisPatterns(uint32_t bitwidth) {
+            cobra::BudgetVector< TwoVarBasisPattern > patterns;
             patterns.reserve(14);
             for (uint8_t key = 1; key < 0xF; ++key) {
+                ::cobra::budget::Checkpoint();
                 auto basis = Match2varBoolean(key);
                 if (!basis.has_value()) { continue; }
                 auto sig = EvaluateBooleanSignature(**basis, 2, bitwidth);
-                patterns.push_back(
-                    TwoVarBasisPattern{
-                        .expr = std::move(*basis),
-                        .sig  = std::move(sig),
-                    }
-                );
+                patterns.push_back(TwoVarBasisPattern{
+                    .expr = std::move(*basis),
+                    .sig  = std::move(sig),
+                });
             }
             return patterns;
         }
 
-        std::optional< std::unique_ptr< Expr > > TrySimplifyTwoVarPatternSum(
-            const Expr &expr, const std::vector< uint64_t > &sig, uint32_t bitwidth,
-            const ExprCost &baseline_cost
-        ) {
+        std::optional< std::unique_ptr< Expr > >
+        TrySimplifyTwoVarPatternSum(const Expr &expr,
+                                    const cobra::BudgetVector< uint64_t > &sig,
+                                    uint32_t bitwidth, const ExprCost &baseline_cost) {
             const auto coeff_candidates = BuildCoefficientCandidates(sig, bitwidth);
             const auto basis_patterns   = BuildTwoVarBasisPatterns(bitwidth);
 
@@ -102,36 +111,33 @@ namespace cobra {
             auto best_cost = baseline_cost;
 
             for (size_t i = 0; i < basis_patterns.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 for (size_t j = i + 1; j < basis_patterns.size(); ++j) {
+                    ::cobra::budget::Checkpoint();
                     for (uint64_t first_coeff : coeff_candidates) {
+                        ::cobra::budget::Checkpoint();
                         for (uint64_t second_coeff : coeff_candidates) {
+                            ::cobra::budget::Checkpoint();
                             if (first_coeff == 0 || second_coeff == 0) { continue; }
 
                             const uint64_t constant = ModSub(
-                                ModSub(
-                                    sig[0],
-                                    ModMul(first_coeff, basis_patterns[i].sig[0], bitwidth),
-                                    bitwidth
-                                ),
+                                ModSub(sig[0],
+                                       ModMul(first_coeff, basis_patterns[i].sig[0], bitwidth),
+                                       bitwidth),
                                 ModMul(second_coeff, basis_patterns[j].sig[0], bitwidth),
-                                bitwidth
-                            );
+                                bitwidth);
 
                             bool matches = true;
                             for (size_t point = 1; point < sig.size(); ++point) {
+                                ::cobra::budget::Checkpoint();
                                 const uint64_t predicted = ModAdd(
                                     constant,
-                                    ModAdd(
-                                        ModMul(
-                                            first_coeff, basis_patterns[i].sig[point], bitwidth
-                                        ),
-                                        ModMul(
-                                            second_coeff, basis_patterns[j].sig[point], bitwidth
-                                        ),
-                                        bitwidth
-                                    ),
-                                    bitwidth
-                                );
+                                    ModAdd(ModMul(first_coeff, basis_patterns[i].sig[point],
+                                                  bitwidth),
+                                           ModMul(second_coeff, basis_patterns[j].sig[point],
+                                                  bitwidth),
+                                           bitwidth),
+                                    bitwidth);
                                 if (predicted != sig[point]) {
                                     matches = false;
                                     break;
@@ -141,13 +147,10 @@ namespace cobra {
 
                             auto candidate = BuildAffineBasisExpr(
                                 constant,
-                                ApplyCoefficient(
-                                    CloneExpr(*basis_patterns[i].expr), first_coeff, bitwidth
-                                ),
-                                ApplyCoefficient(
-                                    CloneExpr(*basis_patterns[j].expr), second_coeff, bitwidth
-                                )
-                            );
+                                ApplyCoefficient(CloneExpr(*basis_patterns[i].expr),
+                                                 first_coeff, bitwidth),
+                                ApplyCoefficient(CloneExpr(*basis_patterns[j].expr),
+                                                 second_coeff, bitwidth));
                             const auto candidate_cost = ComputeCost(*candidate).cost;
                             if (!IsBetter(candidate_cost, best_cost)) { continue; }
 
@@ -164,12 +167,12 @@ namespace cobra {
             return best;
         }
 
-        std::optional< std::unique_ptr< Expr > >
-        TrySimplifyPatternSubtree(const Expr &expr, uint32_t bitwidth) {
+        std::optional< std::unique_ptr< Expr > > TrySimplifyPatternSubtree(const Expr &expr,
+                                                                           uint32_t bitwidth) {
             const auto baseline_cost = ComputeCost(expr).cost;
             if (baseline_cost.weighted_size <= 1) { return std::nullopt; }
 
-            std::vector< uint32_t > support;
+            cobra::BudgetVector< uint32_t > support;
             CollectSupport(expr, support);
             std::sort(support.begin(), support.end());
 
@@ -179,8 +182,11 @@ namespace cobra {
             auto dense_expr = CloneExpr(expr);
             if (!support.empty()) {
                 const uint32_t max_idx = support.back();
-                std::vector< uint32_t > dense_map(max_idx + 1, 0);
-                for (uint32_t i = 0; i < support.size(); ++i) { dense_map[support[i]] = i; }
+                cobra::BudgetVector< uint32_t > dense_map(max_idx + 1, 0);
+                for (uint32_t i = 0; i < support.size(); ++i) {
+                    ::cobra::budget::Checkpoint();
+                    dense_map[support[i]] = i;
+                }
                 RemapVarIndices(*dense_expr, dense_map);
             }
 
@@ -207,12 +213,12 @@ namespace cobra {
             return std::nullopt;
         }
 
-        bool AllEqual(const std::vector< uint64_t > &sig) {
+        bool AllEqual(const cobra::BudgetVector< uint64_t > &sig) {
             return std::all_of(sig.begin(), sig.end(), [&](uint64_t v) { return v == sig[0]; });
         }
 
         std::optional< std::unique_ptr< Expr > >
-        Match1var(const std::vector< uint64_t > &sig, uint32_t bitwidth) {
+        Match1var(const cobra::BudgetVector< uint64_t > &sig, uint32_t bitwidth) {
             if (sig[0] == 0 && sig[1] == 1) { return Expr::Variable(0); }
             if (sig[0] == 0 && sig[1] != 0) {
                 return Expr::Mul(Expr::Constant(sig[1]), Expr::Variable(0));
@@ -225,21 +231,23 @@ namespace cobra {
             return std::nullopt;
         }
 
-        bool IsBooleanSig(const std::vector< uint64_t > &sig) {
+        bool IsBooleanSig(const cobra::BudgetVector< uint64_t > &sig) {
             return std::all_of(sig.begin(), sig.end(), [](uint64_t v) { return v <= 1; });
         }
 
-        uint32_t PackBoolSig(const std::vector< uint64_t > &sig) {
+        uint32_t PackBoolSig(const cobra::BudgetVector< uint64_t > &sig) {
             uint32_t key = 0;
             for (size_t i = 0; i < sig.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (sig[i] != 0u) { key |= (uint32_t{ 1 } << i); }
             }
             return key;
         }
 
-        uint64_t PackBoolSig64(const std::vector< uint64_t > &sig) {
+        uint64_t PackBoolSig64(const cobra::BudgetVector< uint64_t > &sig) {
             uint64_t key = 0;
             for (size_t i = 0; i < sig.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (sig[i] != 0u) { key |= (uint64_t{ 1 } << i); }
             }
             return key;
@@ -320,15 +328,13 @@ namespace cobra {
                 case 0x0A: // x & ~z
                     return Expr::BitwiseAnd(x(), Expr::BitwiseNot(z()));
                 case 0x0B: // ~z & (x | ~y)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseNot(z()), Expr::BitwiseOr(x(), Expr::BitwiseNot(y()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseNot(z()),
+                                            Expr::BitwiseOr(x(), Expr::BitwiseNot(y())));
                 case 0x0C: // y & ~z
                     return Expr::BitwiseAnd(y(), Expr::BitwiseNot(z()));
                 case 0x0D: // ~z & (y | ~x)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseNot(z()), Expr::BitwiseOr(y(), Expr::BitwiseNot(x()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseNot(z()),
+                                            Expr::BitwiseOr(y(), Expr::BitwiseNot(x())));
                 case 0x0E: // ~z & (x | y)
                     return Expr::BitwiseAnd(Expr::BitwiseNot(z()), Expr::BitwiseOr(x(), y()));
                 case 0x0F: // ~z
@@ -346,42 +352,32 @@ namespace cobra {
                 case 0x15: // ~(x | y & z)
                     return Expr::BitwiseNot(Expr::BitwiseOr(x(), Expr::BitwiseAnd(y(), z())));
                 case 0x16: // x ^ ((x & y) | (y ^ z))
-                    return Expr::BitwiseXor(
-                        x(),
-                        Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()), Expr::BitwiseXor(y(), z()))
-                    );
+                    return Expr::BitwiseXor(x(),
+                                            Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()),
+                                                            Expr::BitwiseXor(y(), z())));
                 case 0x17: // x ^ ((x ^ ~y) | (y ^ z))
                     return Expr::BitwiseXor(
                         x(),
-                        Expr::BitwiseOr(
-                            Expr::BitwiseXor(x(), Expr::BitwiseNot(y())),
-                            Expr::BitwiseXor(y(), z())
-                        )
-                    );
+                        Expr::BitwiseOr(Expr::BitwiseXor(x(), Expr::BitwiseNot(y())),
+                                        Expr::BitwiseXor(y(), z())));
                 case 0x18: // (x ^ z) & (y ^ z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseXor(x(), z()), Expr::BitwiseXor(y(), z())
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseXor(x(), z()),
+                                            Expr::BitwiseXor(y(), z()));
                 case 0x19: // ~((x ^ y) | x & z)
-                    return Expr::BitwiseNot(
-                        Expr::BitwiseOr(Expr::BitwiseXor(x(), y()), Expr::BitwiseAnd(x(), z()))
-                    );
+                    return Expr::BitwiseNot(Expr::BitwiseOr(Expr::BitwiseXor(x(), y()),
+                                                            Expr::BitwiseAnd(x(), z())));
                 case 0x1A: // z ^ (x | y & z)
-                    return Expr::BitwiseXor(
-                        z(), Expr::BitwiseOr(x(), Expr::BitwiseAnd(y(), z()))
-                    );
+                    return Expr::BitwiseXor(z(),
+                                            Expr::BitwiseOr(x(), Expr::BitwiseAnd(y(), z())));
                 case 0x1B: // (x | y) ^ (z | ~x)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseOr(x(), y()), Expr::BitwiseOr(z(), Expr::BitwiseNot(x()))
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseOr(x(), y()),
+                                            Expr::BitwiseOr(z(), Expr::BitwiseNot(x())));
                 case 0x1C: // z ^ (y | x & z)
-                    return Expr::BitwiseXor(
-                        z(), Expr::BitwiseOr(y(), Expr::BitwiseAnd(x(), z()))
-                    );
+                    return Expr::BitwiseXor(z(),
+                                            Expr::BitwiseOr(y(), Expr::BitwiseAnd(x(), z())));
                 case 0x1D: // (x | y) ^ (z | ~y)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseOr(x(), y()), Expr::BitwiseOr(z(), Expr::BitwiseNot(y()))
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseOr(x(), y()),
+                                            Expr::BitwiseOr(z(), Expr::BitwiseNot(y())));
                 case 0x1E: // z ^ (x | y)
                     return Expr::BitwiseXor(z(), Expr::BitwiseOr(x(), y()));
                 case 0x1F: // ~(z & (x | y))
@@ -393,106 +389,83 @@ namespace cobra {
                 case 0x22: // x & ~y
                     return Expr::BitwiseAnd(x(), Expr::BitwiseNot(y()));
                 case 0x23: // ~y & (x | ~z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseNot(y()), Expr::BitwiseOr(x(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseNot(y()),
+                                            Expr::BitwiseOr(x(), Expr::BitwiseNot(z())));
                 case 0x24: // (x ^ y) & (y ^ z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseXor(x(), y()), Expr::BitwiseXor(y(), z())
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseXor(x(), y()),
+                                            Expr::BitwiseXor(y(), z()));
                 case 0x25: // ~(x & y | (x ^ z))
-                    return Expr::BitwiseNot(
-                        Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()), Expr::BitwiseXor(x(), z()))
-                    );
+                    return Expr::BitwiseNot(Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()),
+                                                            Expr::BitwiseXor(x(), z())));
                 case 0x26: // y ^ (x | y & z)
-                    return Expr::BitwiseXor(
-                        y(), Expr::BitwiseOr(x(), Expr::BitwiseAnd(y(), z()))
-                    );
+                    return Expr::BitwiseXor(y(),
+                                            Expr::BitwiseOr(x(), Expr::BitwiseAnd(y(), z())));
                 case 0x27: // (x & y) ^ (x | ~z)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseAnd(x(), y()), Expr::BitwiseOr(x(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseAnd(x(), y()),
+                                            Expr::BitwiseOr(x(), Expr::BitwiseNot(z())));
                 case 0x28: // x & (y ^ z)
                     return Expr::BitwiseAnd(x(), Expr::BitwiseXor(y(), z()));
                 case 0x29: // y ^ ((x ^ ~z) | y & z)
                     return Expr::BitwiseXor(
                         y(),
-                        Expr::BitwiseOr(
-                            Expr::BitwiseXor(x(), Expr::BitwiseNot(z())),
-                            Expr::BitwiseAnd(y(), z())
-                        )
-                    );
+                        Expr::BitwiseOr(Expr::BitwiseXor(x(), Expr::BitwiseNot(z())),
+                                        Expr::BitwiseAnd(y(), z())));
                 case 0x2A: // x & ~(y & z)
                     return Expr::BitwiseAnd(x(), Expr::BitwiseNot(Expr::BitwiseAnd(y(), z())));
                 case 0x2B: // x ^ ~((x ^ y) | (x ^ z))
                     return Expr::BitwiseXor(
                         x(),
-                        Expr::BitwiseNot(
-                            Expr::BitwiseOr(
-                                Expr::BitwiseXor(x(), y()), Expr::BitwiseXor(x(), z())
-                            )
-                        )
-                    );
+                        Expr::BitwiseNot(Expr::BitwiseOr(Expr::BitwiseXor(x(), y()),
+                                                         Expr::BitwiseXor(x(), z()))));
                 case 0x2C: // (x | y) & (y ^ z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseOr(x(), y()), Expr::BitwiseXor(y(), z())
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseOr(x(), y()),
+                                            Expr::BitwiseXor(y(), z()));
                 case 0x2D: // z ^ (y | ~x)
                     return Expr::BitwiseXor(z(), Expr::BitwiseOr(y(), Expr::BitwiseNot(x())));
                 case 0x2E: // (x | y) ^ (y & z)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseOr(x(), y()), Expr::BitwiseAnd(y(), z())
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseOr(x(), y()),
+                                            Expr::BitwiseAnd(y(), z()));
                 case 0x2F: // ~z | (x & ~y)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseNot(z()), Expr::BitwiseAnd(x(), Expr::BitwiseNot(y()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseNot(z()),
+                                           Expr::BitwiseAnd(x(), Expr::BitwiseNot(y())));
                 case 0x30: // z & ~y
                     return Expr::BitwiseAnd(z(), Expr::BitwiseNot(y()));
                 case 0x31: // ~y & (z | ~x)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseNot(y()), Expr::BitwiseOr(z(), Expr::BitwiseNot(x()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseNot(y()),
+                                            Expr::BitwiseOr(z(), Expr::BitwiseNot(x())));
                 case 0x32: // ~y & (x | z)
                     return Expr::BitwiseAnd(Expr::BitwiseNot(y()), Expr::BitwiseOr(x(), z()));
                 case 0x33: // ~y
                     return Expr::BitwiseNot(y());
                 case 0x34: // y ^ (z | x & y)
-                    return Expr::BitwiseXor(
-                        y(), Expr::BitwiseOr(z(), Expr::BitwiseAnd(x(), y()))
-                    );
+                    return Expr::BitwiseXor(y(),
+                                            Expr::BitwiseOr(z(), Expr::BitwiseAnd(x(), y())));
                 case 0x35: // (x | z) ^ (y | ~z)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseOr(x(), z()), Expr::BitwiseOr(y(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseOr(x(), z()),
+                                            Expr::BitwiseOr(y(), Expr::BitwiseNot(z())));
                 case 0x36: // y ^ (x | z)
                     return Expr::BitwiseXor(y(), Expr::BitwiseOr(x(), z()));
                 case 0x37: // ~(y & (x | z))
                     return Expr::BitwiseNot(Expr::BitwiseAnd(y(), Expr::BitwiseOr(x(), z())));
                 case 0x38: // (x | z) & (y ^ z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseOr(x(), z()), Expr::BitwiseXor(y(), z())
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseOr(x(), z()),
+                                            Expr::BitwiseXor(y(), z()));
                 case 0x39: // y ^ (z | ~x)
                     return Expr::BitwiseXor(y(), Expr::BitwiseOr(z(), Expr::BitwiseNot(x())));
                 case 0x3A: // (x | z) ^ (y & z)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseOr(x(), z()), Expr::BitwiseAnd(y(), z())
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseOr(x(), z()),
+                                            Expr::BitwiseAnd(y(), z()));
                 case 0x3B: // ~y | (x & ~z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseNot(y()), Expr::BitwiseAnd(x(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseNot(y()),
+                                           Expr::BitwiseAnd(x(), Expr::BitwiseNot(z())));
                 case 0x3C: // y ^ z
                     return Expr::BitwiseXor(y(), z());
                 case 0x3D: // (y ^ z) | ~(x | y)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(y(), z()), Expr::BitwiseNot(Expr::BitwiseOr(x(), y()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(y(), z()),
+                                           Expr::BitwiseNot(Expr::BitwiseOr(x(), y())));
                 case 0x3E: // (x & ~y) | (y ^ z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseAnd(x(), Expr::BitwiseNot(y())), Expr::BitwiseXor(y(), z())
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseAnd(x(), Expr::BitwiseNot(y())),
+                                           Expr::BitwiseXor(y(), z()));
                 case 0x3F: // ~(y & z)
                     return Expr::BitwiseNot(Expr::BitwiseAnd(y(), z()));
                 case 0x40: // y & z & ~x
@@ -500,41 +473,32 @@ namespace cobra {
                 case 0x41: // ~(x | (y ^ z))
                     return Expr::BitwiseNot(Expr::BitwiseOr(x(), Expr::BitwiseXor(y(), z())));
                 case 0x42: // (x ^ y) & (x ^ z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseXor(x(), y()), Expr::BitwiseXor(x(), z())
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseXor(x(), y()),
+                                            Expr::BitwiseXor(x(), z()));
                 case 0x43: // ~(x & y | (y ^ z))
-                    return Expr::BitwiseNot(
-                        Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()), Expr::BitwiseXor(y(), z()))
-                    );
+                    return Expr::BitwiseNot(Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()),
+                                                            Expr::BitwiseXor(y(), z())));
                 case 0x44: // y & ~x
                     return Expr::BitwiseAnd(y(), Expr::BitwiseNot(x()));
                 case 0x45: // ~x & (y | ~z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseNot(x()), Expr::BitwiseOr(y(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseNot(x()),
+                                            Expr::BitwiseOr(y(), Expr::BitwiseNot(z())));
                 case 0x46: // x ^ (y | x & z)
-                    return Expr::BitwiseXor(
-                        x(), Expr::BitwiseOr(y(), Expr::BitwiseAnd(x(), z()))
-                    );
+                    return Expr::BitwiseXor(x(),
+                                            Expr::BitwiseOr(y(), Expr::BitwiseAnd(x(), z())));
                 case 0x47: // (x & y) ^ (y | ~z)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseAnd(x(), y()), Expr::BitwiseOr(y(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseAnd(x(), y()),
+                                            Expr::BitwiseOr(y(), Expr::BitwiseNot(z())));
                 case 0x48: // y & (x ^ z)
                     return Expr::BitwiseAnd(y(), Expr::BitwiseXor(x(), z()));
                 case 0x49: // x ^ ((x & z) | (y ^ ~z))
                     return Expr::BitwiseXor(
                         x(),
-                        Expr::BitwiseOr(
-                            Expr::BitwiseAnd(x(), z()),
-                            Expr::BitwiseXor(y(), Expr::BitwiseNot(z()))
-                        )
-                    );
+                        Expr::BitwiseOr(Expr::BitwiseAnd(x(), z()),
+                                        Expr::BitwiseXor(y(), Expr::BitwiseNot(z()))));
                 case 0x4A: // (x | y) & (x ^ z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseOr(x(), y()), Expr::BitwiseXor(x(), z())
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseOr(x(), y()),
+                                            Expr::BitwiseXor(x(), z()));
                 case 0x4B: // z ^ (x | ~y)
                     return Expr::BitwiseXor(z(), Expr::BitwiseOr(x(), Expr::BitwiseNot(y())));
                 case 0x4C: // y & ~(x & z)
@@ -542,33 +506,25 @@ namespace cobra {
                 case 0x4D: // x ^ ((x ^ y) | (x ^ ~z))
                     return Expr::BitwiseXor(
                         x(),
-                        Expr::BitwiseOr(
-                            Expr::BitwiseXor(x(), y()),
-                            Expr::BitwiseXor(x(), Expr::BitwiseNot(z()))
-                        )
-                    );
+                        Expr::BitwiseOr(Expr::BitwiseXor(x(), y()),
+                                        Expr::BitwiseXor(x(), Expr::BitwiseNot(z()))));
                 case 0x4E: // (x | y) ^ (x & z)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseOr(x(), y()), Expr::BitwiseAnd(x(), z())
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseOr(x(), y()),
+                                            Expr::BitwiseAnd(x(), z()));
                 case 0x4F: // ~z | (y & ~x)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseNot(z()), Expr::BitwiseAnd(y(), Expr::BitwiseNot(x()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseNot(z()),
+                                           Expr::BitwiseAnd(y(), Expr::BitwiseNot(x())));
                 case 0x50: // z & ~x
                     return Expr::BitwiseAnd(z(), Expr::BitwiseNot(x()));
                 case 0x51: // ~x & (z | ~y)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseNot(x()), Expr::BitwiseOr(z(), Expr::BitwiseNot(y()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseNot(x()),
+                                            Expr::BitwiseOr(z(), Expr::BitwiseNot(y())));
                 case 0x52: // x ^ (z | x & y)
-                    return Expr::BitwiseXor(
-                        x(), Expr::BitwiseOr(z(), Expr::BitwiseAnd(x(), y()))
-                    );
+                    return Expr::BitwiseXor(x(),
+                                            Expr::BitwiseOr(z(), Expr::BitwiseAnd(x(), y())));
                 case 0x53: // (x & z) ^ (z | ~y)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseAnd(x(), z()), Expr::BitwiseOr(z(), Expr::BitwiseNot(y()))
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseAnd(x(), z()),
+                                            Expr::BitwiseOr(z(), Expr::BitwiseNot(y())));
                 case 0x54: // ~x & (y | z)
                     return Expr::BitwiseAnd(Expr::BitwiseNot(x()), Expr::BitwiseOr(y(), z()));
                 case 0x55: // ~x
@@ -578,29 +534,24 @@ namespace cobra {
                 case 0x57: // ~(x & (y | z))
                     return Expr::BitwiseNot(Expr::BitwiseAnd(x(), Expr::BitwiseOr(y(), z())));
                 case 0x58: // (x ^ z) & (y | z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseXor(x(), z()), Expr::BitwiseOr(y(), z())
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseXor(x(), z()),
+                                            Expr::BitwiseOr(y(), z()));
                 case 0x59: // x ^ (z | ~y)
                     return Expr::BitwiseXor(x(), Expr::BitwiseOr(z(), Expr::BitwiseNot(y())));
                 case 0x5A: // x ^ z
                     return Expr::BitwiseXor(x(), z());
                 case 0x5B: // (x ^ z) | ~(x | y)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), z()), Expr::BitwiseNot(Expr::BitwiseOr(x(), y()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), z()),
+                                           Expr::BitwiseNot(Expr::BitwiseOr(x(), y())));
                 case 0x5C: // (x & z) ^ (y | z)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseAnd(x(), z()), Expr::BitwiseOr(y(), z())
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseAnd(x(), z()),
+                                            Expr::BitwiseOr(y(), z()));
                 case 0x5D: // ~x | (y & ~z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseNot(x()), Expr::BitwiseAnd(y(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseNot(x()),
+                                           Expr::BitwiseAnd(y(), Expr::BitwiseNot(z())));
                 case 0x5E: // (x ^ z) | (y & ~x)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), z()), Expr::BitwiseAnd(y(), Expr::BitwiseNot(x()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), z()),
+                                           Expr::BitwiseAnd(y(), Expr::BitwiseNot(x())));
                 case 0x5F: // ~(x & z)
                     return Expr::BitwiseNot(Expr::BitwiseAnd(x(), z()));
                 case 0x60: // z & (x ^ y)
@@ -608,34 +559,26 @@ namespace cobra {
                 case 0x61: // x ^ ((x & y) | (y ^ ~z))
                     return Expr::BitwiseXor(
                         x(),
-                        Expr::BitwiseOr(
-                            Expr::BitwiseAnd(x(), y()),
-                            Expr::BitwiseXor(y(), Expr::BitwiseNot(z()))
-                        )
-                    );
+                        Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()),
+                                        Expr::BitwiseXor(y(), Expr::BitwiseNot(z()))));
                 case 0x62: // (x ^ y) & (x | z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseXor(x(), y()), Expr::BitwiseOr(x(), z())
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseXor(x(), y()),
+                                            Expr::BitwiseOr(x(), z()));
                 case 0x63: // y ^ (x | ~z)
                     return Expr::BitwiseXor(y(), Expr::BitwiseOr(x(), Expr::BitwiseNot(z())));
                 case 0x64: // (x ^ y) & (y | z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseXor(x(), y()), Expr::BitwiseOr(y(), z())
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseXor(x(), y()),
+                                            Expr::BitwiseOr(y(), z()));
                 case 0x65: // x ^ (y | ~z)
                     return Expr::BitwiseXor(x(), Expr::BitwiseOr(y(), Expr::BitwiseNot(z())));
                 case 0x66: // x ^ y
                     return Expr::BitwiseXor(x(), y());
                 case 0x67: // (x ^ y) | ~(x | z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), y()), Expr::BitwiseNot(Expr::BitwiseOr(x(), z()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), y()),
+                                           Expr::BitwiseNot(Expr::BitwiseOr(x(), z())));
                 case 0x68: // (x & y) ^ (z & (x | y))
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseAnd(x(), y()),
-                        Expr::BitwiseAnd(z(), Expr::BitwiseOr(x(), y()))
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseAnd(x(), y()),
+                                            Expr::BitwiseAnd(z(), Expr::BitwiseOr(x(), y())));
                 case 0x69: // x ^ y ^ ~z
                     return Expr::BitwiseXor(x(), Expr::BitwiseXor(y(), Expr::BitwiseNot(z())));
                 case 0x6A: // x ^ (y & z)
@@ -643,27 +586,18 @@ namespace cobra {
                 case 0x6B: // y ^ ~((x ^ z) & (y | z))
                     return Expr::BitwiseXor(
                         y(),
-                        Expr::BitwiseNot(
-                            Expr::BitwiseAnd(
-                                Expr::BitwiseXor(x(), z()), Expr::BitwiseOr(y(), z())
-                            )
-                        )
-                    );
+                        Expr::BitwiseNot(Expr::BitwiseAnd(Expr::BitwiseXor(x(), z()),
+                                                          Expr::BitwiseOr(y(), z()))));
                 case 0x6C: // y ^ (x & z)
                     return Expr::BitwiseXor(y(), Expr::BitwiseAnd(x(), z()));
                 case 0x6D: // x ^ ~((x | z) & (y ^ z))
                     return Expr::BitwiseXor(
                         x(),
-                        Expr::BitwiseNot(
-                            Expr::BitwiseAnd(
-                                Expr::BitwiseOr(x(), z()), Expr::BitwiseXor(y(), z())
-                            )
-                        )
-                    );
+                        Expr::BitwiseNot(Expr::BitwiseAnd(Expr::BitwiseOr(x(), z()),
+                                                          Expr::BitwiseXor(y(), z()))));
                 case 0x6E: // (x ^ y) | (x & ~z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), y()), Expr::BitwiseAnd(x(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), y()),
+                                           Expr::BitwiseAnd(x(), Expr::BitwiseNot(z())));
                 case 0x6F: // ~z | (x ^ y)
                     return Expr::BitwiseOr(Expr::BitwiseNot(z()), Expr::BitwiseXor(x(), y()));
                 case 0x70: // z & ~(x & y)
@@ -671,31 +605,23 @@ namespace cobra {
                 case 0x71: // x ^ ((x ^ z) | (x ^ ~y))
                     return Expr::BitwiseXor(
                         x(),
-                        Expr::BitwiseOr(
-                            Expr::BitwiseXor(x(), z()),
-                            Expr::BitwiseXor(x(), Expr::BitwiseNot(y()))
-                        )
-                    );
+                        Expr::BitwiseOr(Expr::BitwiseXor(x(), z()),
+                                        Expr::BitwiseXor(x(), Expr::BitwiseNot(y()))));
                 case 0x72: // (x & y) ^ (x | z)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseAnd(x(), y()), Expr::BitwiseOr(x(), z())
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseAnd(x(), y()),
+                                            Expr::BitwiseOr(x(), z()));
                 case 0x73: // ~y | (z & ~x)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseNot(y()), Expr::BitwiseAnd(z(), Expr::BitwiseNot(x()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseNot(y()),
+                                           Expr::BitwiseAnd(z(), Expr::BitwiseNot(x())));
                 case 0x74: // (x & y) ^ (y | z)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseAnd(x(), y()), Expr::BitwiseOr(y(), z())
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseAnd(x(), y()),
+                                            Expr::BitwiseOr(y(), z()));
                 case 0x75: // ~x | (z & ~y)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseNot(x()), Expr::BitwiseAnd(z(), Expr::BitwiseNot(y()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseNot(x()),
+                                           Expr::BitwiseAnd(z(), Expr::BitwiseNot(y())));
                 case 0x76: // (x ^ y) | (z & ~x)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), y()), Expr::BitwiseAnd(z(), Expr::BitwiseNot(x()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), y()),
+                                           Expr::BitwiseAnd(z(), Expr::BitwiseNot(x())));
                 case 0x77: // ~(x & y)
                     return Expr::BitwiseNot(Expr::BitwiseAnd(x(), y()));
                 case 0x78: // z ^ (x & y)
@@ -703,102 +629,80 @@ namespace cobra {
                 case 0x79: // x ^ ~((x | y) & (y ^ z))
                     return Expr::BitwiseXor(
                         x(),
-                        Expr::BitwiseNot(
-                            Expr::BitwiseAnd(
-                                Expr::BitwiseOr(x(), y()), Expr::BitwiseXor(y(), z())
-                            )
-                        )
-                    );
+                        Expr::BitwiseNot(Expr::BitwiseAnd(Expr::BitwiseOr(x(), y()),
+                                                          Expr::BitwiseXor(y(), z()))));
                 case 0x7A: // (x ^ z) | (x & ~y)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), z()), Expr::BitwiseAnd(x(), Expr::BitwiseNot(y()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), z()),
+                                           Expr::BitwiseAnd(x(), Expr::BitwiseNot(y())));
                 case 0x7B: // ~y | (x ^ z)
                     return Expr::BitwiseOr(Expr::BitwiseNot(y()), Expr::BitwiseXor(x(), z()));
                 case 0x7C: // (y ^ z) | (y & ~x)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(y(), z()), Expr::BitwiseAnd(y(), Expr::BitwiseNot(x()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(y(), z()),
+                                           Expr::BitwiseAnd(y(), Expr::BitwiseNot(x())));
                 case 0x7D: // ~x | (y ^ z)
                     return Expr::BitwiseOr(Expr::BitwiseNot(x()), Expr::BitwiseXor(y(), z()));
                 case 0x7E: // (x ^ y) | (x ^ z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), y()), Expr::BitwiseXor(x(), z())
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), y()),
+                                           Expr::BitwiseXor(x(), z()));
                 case 0x7F: // ~(x & y & z)
                     return Expr::BitwiseNot(Expr::BitwiseAnd(x(), Expr::BitwiseAnd(y(), z())));
                 case 0x80: // x & y & z
                     return Expr::BitwiseAnd(x(), Expr::BitwiseAnd(y(), z()));
                 case 0x81: // ~((x ^ y) | (x ^ z))
-                    return Expr::BitwiseNot(
-                        Expr::BitwiseOr(Expr::BitwiseXor(x(), y()), Expr::BitwiseXor(x(), z()))
-                    );
+                    return Expr::BitwiseNot(Expr::BitwiseOr(Expr::BitwiseXor(x(), y()),
+                                                            Expr::BitwiseXor(x(), z())));
                 case 0x82: // x & (y ^ ~z)
                     return Expr::BitwiseAnd(x(), Expr::BitwiseXor(y(), Expr::BitwiseNot(z())));
                 case 0x83: // (x | ~y) & (y ^ ~z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseOr(x(), Expr::BitwiseNot(y())),
-                        Expr::BitwiseXor(y(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseOr(x(), Expr::BitwiseNot(y())),
+                                            Expr::BitwiseXor(y(), Expr::BitwiseNot(z())));
                 case 0x84: // y & (x ^ ~z)
                     return Expr::BitwiseAnd(y(), Expr::BitwiseXor(x(), Expr::BitwiseNot(z())));
                 case 0x85: // (x ^ ~z) & (y | ~x)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseXor(x(), Expr::BitwiseNot(z())),
-                        Expr::BitwiseOr(y(), Expr::BitwiseNot(x()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseXor(x(), Expr::BitwiseNot(z())),
+                                            Expr::BitwiseOr(y(), Expr::BitwiseNot(x())));
                 case 0x86: // x ^ ((x | y) & (y ^ z))
-                    return Expr::BitwiseXor(
-                        x(),
-                        Expr::BitwiseAnd(Expr::BitwiseOr(x(), y()), Expr::BitwiseXor(y(), z()))
-                    );
+                    return Expr::BitwiseXor(x(),
+                                            Expr::BitwiseAnd(Expr::BitwiseOr(x(), y()),
+                                                             Expr::BitwiseXor(y(), z())));
                 case 0x87: // z ^ ~(x & y)
                     return Expr::BitwiseXor(z(), Expr::BitwiseNot(Expr::BitwiseAnd(x(), y())));
                 case 0x88: // x & y
                     return Expr::BitwiseAnd(x(), y());
                 case 0x89: // (x ^ ~y) & (x | ~z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseXor(x(), Expr::BitwiseNot(y())),
-                        Expr::BitwiseOr(x(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseXor(x(), Expr::BitwiseNot(y())),
+                                            Expr::BitwiseOr(x(), Expr::BitwiseNot(z())));
                 case 0x8A: // x & (y | ~z)
                     return Expr::BitwiseAnd(x(), Expr::BitwiseOr(y(), Expr::BitwiseNot(z())));
                 case 0x8B: // (x & y) | ~(y | z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseAnd(x(), y()), Expr::BitwiseNot(Expr::BitwiseOr(y(), z()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()),
+                                           Expr::BitwiseNot(Expr::BitwiseOr(y(), z())));
                 case 0x8C: // y & (x | ~z)
                     return Expr::BitwiseAnd(y(), Expr::BitwiseOr(x(), Expr::BitwiseNot(z())));
                 case 0x8D: // (x & y) | ~(x | z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseAnd(x(), y()), Expr::BitwiseNot(Expr::BitwiseOr(x(), z()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()),
+                                           Expr::BitwiseNot(Expr::BitwiseOr(x(), z())));
                 case 0x8E: // x ^ ((x ^ y) & (y ^ z))
-                    return Expr::BitwiseXor(
-                        x(),
-                        Expr::BitwiseAnd(Expr::BitwiseXor(x(), y()), Expr::BitwiseXor(y(), z()))
-                    );
+                    return Expr::BitwiseXor(x(),
+                                            Expr::BitwiseAnd(Expr::BitwiseXor(x(), y()),
+                                                             Expr::BitwiseXor(y(), z())));
                 case 0x8F: // ~z | (x & y)
                     return Expr::BitwiseOr(Expr::BitwiseNot(z()), Expr::BitwiseAnd(x(), y()));
                 case 0x90: // z & (x ^ ~y)
                     return Expr::BitwiseAnd(z(), Expr::BitwiseXor(x(), Expr::BitwiseNot(y())));
                 case 0x91: // (x ^ ~y) & (z | ~x)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseXor(x(), Expr::BitwiseNot(y())),
-                        Expr::BitwiseOr(z(), Expr::BitwiseNot(x()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseXor(x(), Expr::BitwiseNot(y())),
+                                            Expr::BitwiseOr(z(), Expr::BitwiseNot(x())));
                 case 0x92: // x ^ ((x | z) & (y ^ z))
-                    return Expr::BitwiseXor(
-                        x(),
-                        Expr::BitwiseAnd(Expr::BitwiseOr(x(), z()), Expr::BitwiseXor(y(), z()))
-                    );
+                    return Expr::BitwiseXor(x(),
+                                            Expr::BitwiseAnd(Expr::BitwiseOr(x(), z()),
+                                                             Expr::BitwiseXor(y(), z())));
                 case 0x93: // y ^ ~(x & z)
                     return Expr::BitwiseXor(y(), Expr::BitwiseNot(Expr::BitwiseAnd(x(), z())));
                 case 0x94: // y ^ ((x ^ z) & (y | z))
-                    return Expr::BitwiseXor(
-                        y(),
-                        Expr::BitwiseAnd(Expr::BitwiseXor(x(), z()), Expr::BitwiseOr(y(), z()))
-                    );
+                    return Expr::BitwiseXor(y(),
+                                            Expr::BitwiseAnd(Expr::BitwiseXor(x(), z()),
+                                                             Expr::BitwiseOr(y(), z())));
                 case 0x95: // x ^ ~(y & z)
                     return Expr::BitwiseXor(x(), Expr::BitwiseNot(Expr::BitwiseAnd(y(), z())));
                 case 0x96: // x ^ y ^ z
@@ -806,61 +710,50 @@ namespace cobra {
                 case 0x97: // x ^ ((y ^ z) | ~(x | y))
                     return Expr::BitwiseXor(
                         x(),
-                        Expr::BitwiseOr(
-                            Expr::BitwiseXor(y(), z()),
-                            Expr::BitwiseNot(Expr::BitwiseOr(x(), y()))
-                        )
-                    );
+                        Expr::BitwiseOr(Expr::BitwiseXor(y(), z()),
+                                        Expr::BitwiseNot(Expr::BitwiseOr(x(), y()))));
                 case 0x98: // (x | z) & (x ^ ~y)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseOr(x(), z()), Expr::BitwiseXor(x(), Expr::BitwiseNot(y()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseOr(x(), z()),
+                                            Expr::BitwiseXor(x(), Expr::BitwiseNot(y())));
                 case 0x99: // x ^ ~y
                     return Expr::BitwiseXor(x(), Expr::BitwiseNot(y()));
                 case 0x9A: // x ^ (z & ~y)
                     return Expr::BitwiseXor(x(), Expr::BitwiseAnd(z(), Expr::BitwiseNot(y())));
                 case 0x9B: // ~((x ^ y) & (y | z))
-                    return Expr::BitwiseNot(
-                        Expr::BitwiseAnd(Expr::BitwiseXor(x(), y()), Expr::BitwiseOr(y(), z()))
-                    );
+                    return Expr::BitwiseNot(Expr::BitwiseAnd(Expr::BitwiseXor(x(), y()),
+                                                             Expr::BitwiseOr(y(), z())));
                 case 0x9C: // y ^ (z & ~x)
                     return Expr::BitwiseXor(y(), Expr::BitwiseAnd(z(), Expr::BitwiseNot(x())));
                 case 0x9D: // ~((x ^ y) & (x | z))
-                    return Expr::BitwiseNot(
-                        Expr::BitwiseAnd(Expr::BitwiseXor(x(), y()), Expr::BitwiseOr(x(), z()))
-                    );
+                    return Expr::BitwiseNot(Expr::BitwiseAnd(Expr::BitwiseXor(x(), y()),
+                                                             Expr::BitwiseOr(x(), z())));
                 case 0x9E: // y ^ x ^ (z | x & y)
                     return Expr::BitwiseXor(
                         y(),
-                        Expr::BitwiseXor(x(), Expr::BitwiseOr(z(), Expr::BitwiseAnd(x(), y())))
-                    );
+                        Expr::BitwiseXor(x(),
+                                         Expr::BitwiseOr(z(), Expr::BitwiseAnd(x(), y()))));
                 case 0x9F: // ~(z & (x ^ y))
                     return Expr::BitwiseNot(Expr::BitwiseAnd(z(), Expr::BitwiseXor(x(), y())));
                 case 0xA0: // x & z
                     return Expr::BitwiseAnd(x(), z());
                 case 0xA1: // (x | ~y) & (x ^ ~z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseOr(x(), Expr::BitwiseNot(y())),
-                        Expr::BitwiseXor(x(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseOr(x(), Expr::BitwiseNot(y())),
+                                            Expr::BitwiseXor(x(), Expr::BitwiseNot(z())));
                 case 0xA2: // x & (z | ~y)
                     return Expr::BitwiseAnd(x(), Expr::BitwiseOr(z(), Expr::BitwiseNot(y())));
                 case 0xA3: // (x & z) | ~(y | z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseAnd(x(), z()), Expr::BitwiseNot(Expr::BitwiseOr(y(), z()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseAnd(x(), z()),
+                                           Expr::BitwiseNot(Expr::BitwiseOr(y(), z())));
                 case 0xA4: // (x | y) & (x ^ ~z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseOr(x(), y()), Expr::BitwiseXor(x(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseOr(x(), y()),
+                                            Expr::BitwiseXor(x(), Expr::BitwiseNot(z())));
                 case 0xA5: // x ^ ~z
                     return Expr::BitwiseXor(x(), Expr::BitwiseNot(z()));
                 case 0xA6: // x ^ (y & ~z)
                     return Expr::BitwiseXor(x(), Expr::BitwiseAnd(y(), Expr::BitwiseNot(z())));
                 case 0xA7: // ~((x ^ z) & (y | z))
-                    return Expr::BitwiseNot(
-                        Expr::BitwiseAnd(Expr::BitwiseXor(x(), z()), Expr::BitwiseOr(y(), z()))
-                    );
+                    return Expr::BitwiseNot(Expr::BitwiseAnd(Expr::BitwiseXor(x(), z()),
+                                                             Expr::BitwiseOr(y(), z())));
                 case 0xA8: // x & (y | z)
                     return Expr::BitwiseAnd(x(), Expr::BitwiseOr(y(), z()));
                 case 0xA9: // x ^ ~(y | z)
@@ -870,13 +763,11 @@ namespace cobra {
                 case 0xAB: // x | ~(y | z)
                     return Expr::BitwiseOr(x(), Expr::BitwiseNot(Expr::BitwiseOr(y(), z())));
                 case 0xAC: // y ^ (z & (x ^ y))
-                    return Expr::BitwiseXor(
-                        y(), Expr::BitwiseAnd(z(), Expr::BitwiseXor(x(), y()))
-                    );
+                    return Expr::BitwiseXor(y(),
+                                            Expr::BitwiseAnd(z(), Expr::BitwiseXor(x(), y())));
                 case 0xAD: // (x & y) | (x ^ ~z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseAnd(x(), y()), Expr::BitwiseXor(x(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()),
+                                           Expr::BitwiseXor(x(), Expr::BitwiseNot(z())));
                 case 0xAE: // x | (y & ~z)
                     return Expr::BitwiseOr(x(), Expr::BitwiseAnd(y(), Expr::BitwiseNot(z())));
                 case 0xAF: // x | ~z
@@ -884,49 +775,42 @@ namespace cobra {
                 case 0xB0: // z & (x | ~y)
                     return Expr::BitwiseAnd(z(), Expr::BitwiseOr(x(), Expr::BitwiseNot(y())));
                 case 0xB1: // (x | y) ^ ~(x & z)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseOr(x(), y()), Expr::BitwiseNot(Expr::BitwiseAnd(x(), z()))
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseOr(x(), y()),
+                                            Expr::BitwiseNot(Expr::BitwiseAnd(x(), z())));
                 case 0xB2: // x ^ ((x ^ z) & (y ^ z))
-                    return Expr::BitwiseXor(
-                        x(),
-                        Expr::BitwiseAnd(Expr::BitwiseXor(x(), z()), Expr::BitwiseXor(y(), z()))
-                    );
+                    return Expr::BitwiseXor(x(),
+                                            Expr::BitwiseAnd(Expr::BitwiseXor(x(), z()),
+                                                             Expr::BitwiseXor(y(), z())));
                 case 0xB3: // ~y | (x & z)
                     return Expr::BitwiseOr(Expr::BitwiseNot(y()), Expr::BitwiseAnd(x(), z()));
                 case 0xB4: // z ^ (y & ~x)
                     return Expr::BitwiseXor(z(), Expr::BitwiseAnd(y(), Expr::BitwiseNot(x())));
                 case 0xB5: // ~((x | y) & (x ^ z))
-                    return Expr::BitwiseNot(
-                        Expr::BitwiseAnd(Expr::BitwiseOr(x(), y()), Expr::BitwiseXor(x(), z()))
-                    );
+                    return Expr::BitwiseNot(Expr::BitwiseAnd(Expr::BitwiseOr(x(), y()),
+                                                             Expr::BitwiseXor(x(), z())));
                 case 0xB6: // z ^ x ^ (y | x & z)
                     return Expr::BitwiseXor(
                         z(),
-                        Expr::BitwiseXor(x(), Expr::BitwiseOr(y(), Expr::BitwiseAnd(x(), z())))
-                    );
+                        Expr::BitwiseXor(x(),
+                                         Expr::BitwiseOr(y(), Expr::BitwiseAnd(x(), z()))));
                 case 0xB7: // ~(y & (x ^ z))
                     return Expr::BitwiseNot(Expr::BitwiseAnd(y(), Expr::BitwiseXor(x(), z())));
                 case 0xB8: // z ^ (y & (x ^ z))
-                    return Expr::BitwiseXor(
-                        z(), Expr::BitwiseAnd(y(), Expr::BitwiseXor(x(), z()))
-                    );
+                    return Expr::BitwiseXor(z(),
+                                            Expr::BitwiseAnd(y(), Expr::BitwiseXor(x(), z())));
                 case 0xB9: // (x & z) | (x ^ ~y)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseAnd(x(), z()), Expr::BitwiseXor(x(), Expr::BitwiseNot(y()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseAnd(x(), z()),
+                                           Expr::BitwiseXor(x(), Expr::BitwiseNot(y())));
                 case 0xBA: // x | (z & ~y)
                     return Expr::BitwiseOr(x(), Expr::BitwiseAnd(z(), Expr::BitwiseNot(y())));
                 case 0xBB: // x | ~y
                     return Expr::BitwiseOr(x(), Expr::BitwiseNot(y()));
                 case 0xBC: // (x & y) | (y ^ z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseAnd(x(), y()), Expr::BitwiseXor(y(), z())
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()),
+                                           Expr::BitwiseXor(y(), z()));
                 case 0xBD: // (x ^ ~y) | (y ^ z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), Expr::BitwiseNot(y())), Expr::BitwiseXor(y(), z())
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), Expr::BitwiseNot(y())),
+                                           Expr::BitwiseXor(y(), z()));
                 case 0xBE: // x | (y ^ z)
                     return Expr::BitwiseOr(x(), Expr::BitwiseXor(y(), z()));
                 case 0xBF: // x | ~(y & z)
@@ -934,40 +818,33 @@ namespace cobra {
                 case 0xC0: // y & z
                     return Expr::BitwiseAnd(y(), z());
                 case 0xC1: // (y | ~x) & (y ^ ~z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseOr(y(), Expr::BitwiseNot(x())),
-                        Expr::BitwiseXor(y(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseOr(y(), Expr::BitwiseNot(x())),
+                                            Expr::BitwiseXor(y(), Expr::BitwiseNot(z())));
                 case 0xC2: // (x | y) & (y ^ ~z)
-                    return Expr::BitwiseAnd(
-                        Expr::BitwiseOr(x(), y()), Expr::BitwiseXor(y(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseAnd(Expr::BitwiseOr(x(), y()),
+                                            Expr::BitwiseXor(y(), Expr::BitwiseNot(z())));
                 case 0xC3: // y ^ ~z
                     return Expr::BitwiseXor(y(), Expr::BitwiseNot(z()));
                 case 0xC4: // y & (z | ~x)
                     return Expr::BitwiseAnd(y(), Expr::BitwiseOr(z(), Expr::BitwiseNot(x())));
                 case 0xC5: // (x | z) ^ ~(y & z)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseOr(x(), z()), Expr::BitwiseNot(Expr::BitwiseAnd(y(), z()))
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseOr(x(), z()),
+                                            Expr::BitwiseNot(Expr::BitwiseAnd(y(), z())));
                 case 0xC6: // y ^ (x & ~z)
                     return Expr::BitwiseXor(y(), Expr::BitwiseAnd(x(), Expr::BitwiseNot(z())));
                 case 0xC7: // ~((x | z) & (y ^ z))
-                    return Expr::BitwiseNot(
-                        Expr::BitwiseAnd(Expr::BitwiseOr(x(), z()), Expr::BitwiseXor(y(), z()))
-                    );
+                    return Expr::BitwiseNot(Expr::BitwiseAnd(Expr::BitwiseOr(x(), z()),
+                                                             Expr::BitwiseXor(y(), z())));
                 case 0xC8: // y & (x | z)
                     return Expr::BitwiseAnd(y(), Expr::BitwiseOr(x(), z()));
                 case 0xC9: // y ^ ~(x | z)
                     return Expr::BitwiseXor(y(), Expr::BitwiseNot(Expr::BitwiseOr(x(), z())));
                 case 0xCA: // x ^ (z & (x ^ y))
-                    return Expr::BitwiseXor(
-                        x(), Expr::BitwiseAnd(z(), Expr::BitwiseXor(x(), y()))
-                    );
+                    return Expr::BitwiseXor(x(),
+                                            Expr::BitwiseAnd(z(), Expr::BitwiseXor(x(), y())));
                 case 0xCB: // (x & y) | (y ^ ~z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseAnd(x(), y()), Expr::BitwiseXor(y(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()),
+                                           Expr::BitwiseXor(y(), Expr::BitwiseNot(z())));
                 case 0xCC: // y
                     return y();
                 case 0xCD: // y | ~(x | z)
@@ -979,45 +856,38 @@ namespace cobra {
                 case 0xD0: // z & (y | ~x)
                     return Expr::BitwiseAnd(z(), Expr::BitwiseOr(y(), Expr::BitwiseNot(x())));
                 case 0xD1: // (x | y) ^ ~(y & z)
-                    return Expr::BitwiseXor(
-                        Expr::BitwiseOr(x(), y()), Expr::BitwiseNot(Expr::BitwiseAnd(y(), z()))
-                    );
+                    return Expr::BitwiseXor(Expr::BitwiseOr(x(), y()),
+                                            Expr::BitwiseNot(Expr::BitwiseAnd(y(), z())));
                 case 0xD2: // z ^ (x & ~y)
                     return Expr::BitwiseXor(z(), Expr::BitwiseAnd(x(), Expr::BitwiseNot(y())));
                 case 0xD3: // ~((x | y) & (y ^ z))
-                    return Expr::BitwiseNot(
-                        Expr::BitwiseAnd(Expr::BitwiseOr(x(), y()), Expr::BitwiseXor(y(), z()))
-                    );
+                    return Expr::BitwiseNot(Expr::BitwiseAnd(Expr::BitwiseOr(x(), y()),
+                                                             Expr::BitwiseXor(y(), z())));
                 case 0xD4: // x ^ ((x ^ y) | (x ^ z))
-                    return Expr::BitwiseXor(
-                        x(),
-                        Expr::BitwiseOr(Expr::BitwiseXor(x(), y()), Expr::BitwiseXor(x(), z()))
-                    );
+                    return Expr::BitwiseXor(x(),
+                                            Expr::BitwiseOr(Expr::BitwiseXor(x(), y()),
+                                                            Expr::BitwiseXor(x(), z())));
                 case 0xD5: // ~x | (y & z)
                     return Expr::BitwiseOr(Expr::BitwiseNot(x()), Expr::BitwiseAnd(y(), z()));
                 case 0xD6: // z ^ y ^ (x | y & z)
                     return Expr::BitwiseXor(
                         z(),
-                        Expr::BitwiseXor(y(), Expr::BitwiseOr(x(), Expr::BitwiseAnd(y(), z())))
-                    );
+                        Expr::BitwiseXor(y(),
+                                         Expr::BitwiseOr(x(), Expr::BitwiseAnd(y(), z()))));
                 case 0xD7: // ~(x & (y ^ z))
                     return Expr::BitwiseNot(Expr::BitwiseAnd(x(), Expr::BitwiseXor(y(), z())));
                 case 0xD8: // z ^ (x & (y ^ z))
-                    return Expr::BitwiseXor(
-                        z(), Expr::BitwiseAnd(x(), Expr::BitwiseXor(y(), z()))
-                    );
+                    return Expr::BitwiseXor(z(),
+                                            Expr::BitwiseAnd(x(), Expr::BitwiseXor(y(), z())));
                 case 0xD9: // (x ^ ~y) | (y & z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), Expr::BitwiseNot(y())), Expr::BitwiseAnd(y(), z())
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), Expr::BitwiseNot(y())),
+                                           Expr::BitwiseAnd(y(), z()));
                 case 0xDA: // (x & y) | (x ^ z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseAnd(x(), y()), Expr::BitwiseXor(x(), z())
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()),
+                                           Expr::BitwiseXor(x(), z()));
                 case 0xDB: // (x ^ z) | (x ^ ~y)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), z()), Expr::BitwiseXor(x(), Expr::BitwiseNot(y()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), z()),
+                                           Expr::BitwiseXor(x(), Expr::BitwiseNot(y())));
                 case 0xDC: // y | (z & ~x)
                     return Expr::BitwiseOr(y(), Expr::BitwiseAnd(z(), Expr::BitwiseNot(x())));
                 case 0xDD: // y | ~x
@@ -1031,43 +901,32 @@ namespace cobra {
                 case 0xE1: // z ^ ~(x | y)
                     return Expr::BitwiseXor(z(), Expr::BitwiseNot(Expr::BitwiseOr(x(), y())));
                 case 0xE2: // x ^ (y & (x ^ z))
-                    return Expr::BitwiseXor(
-                        x(), Expr::BitwiseAnd(y(), Expr::BitwiseXor(x(), z()))
-                    );
+                    return Expr::BitwiseXor(x(),
+                                            Expr::BitwiseAnd(y(), Expr::BitwiseXor(x(), z())));
                 case 0xE3: // (x & z) | (y ^ ~z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseAnd(x(), z()), Expr::BitwiseXor(y(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseAnd(x(), z()),
+                                           Expr::BitwiseXor(y(), Expr::BitwiseNot(z())));
                 case 0xE4: // y ^ (x & (y ^ z))
-                    return Expr::BitwiseXor(
-                        y(), Expr::BitwiseAnd(x(), Expr::BitwiseXor(y(), z()))
-                    );
+                    return Expr::BitwiseXor(y(),
+                                            Expr::BitwiseAnd(x(), Expr::BitwiseXor(y(), z())));
                 case 0xE5: // (x ^ ~z) | (y & z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), Expr::BitwiseNot(z())), Expr::BitwiseAnd(y(), z())
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), Expr::BitwiseNot(z())),
+                                           Expr::BitwiseAnd(y(), z()));
                 case 0xE6: // (x ^ y) | (x & z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), y()), Expr::BitwiseAnd(x(), z())
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), y()),
+                                           Expr::BitwiseAnd(x(), z()));
                 case 0xE7: // (x ^ y) | (x ^ ~z)
-                    return Expr::BitwiseOr(
-                        Expr::BitwiseXor(x(), y()), Expr::BitwiseXor(x(), Expr::BitwiseNot(z()))
-                    );
+                    return Expr::BitwiseOr(Expr::BitwiseXor(x(), y()),
+                                           Expr::BitwiseXor(x(), Expr::BitwiseNot(z())));
                 case 0xE8: // x ^ ((x ^ y) & (x ^ z))
-                    return Expr::BitwiseXor(
-                        x(),
-                        Expr::BitwiseAnd(Expr::BitwiseXor(x(), y()), Expr::BitwiseXor(x(), z()))
-                    );
+                    return Expr::BitwiseXor(x(),
+                                            Expr::BitwiseAnd(Expr::BitwiseXor(x(), y()),
+                                                             Expr::BitwiseXor(x(), z())));
                 case 0xE9: // x ^ ~((x & y) | (y ^ z))
                     return Expr::BitwiseXor(
                         x(),
-                        Expr::BitwiseNot(
-                            Expr::BitwiseOr(
-                                Expr::BitwiseAnd(x(), y()), Expr::BitwiseXor(y(), z())
-                            )
-                        )
-                    );
+                        Expr::BitwiseNot(Expr::BitwiseOr(Expr::BitwiseAnd(x(), y()),
+                                                         Expr::BitwiseXor(y(), z()))));
                 case 0xEA: // x | (y & z)
                     return Expr::BitwiseOr(x(), Expr::BitwiseAnd(y(), z()));
                 case 0xEB: // x | (y ^ ~z)
@@ -1235,12 +1094,13 @@ namespace cobra {
         // is a pure bitwise function with entries in {0, 1}.
         // Returns nullopt if the signature has more than two distinct values
         // or the boolean quotient doesn't match any known pattern.
-        std::optional< std::unique_ptr< Expr > > MatchScaledBoolean(
-            const std::vector< uint64_t > &sig, uint32_t num_vars, uint32_t bitwidth
-        ) {
+        std::optional< std::unique_ptr< Expr > >
+        MatchScaledBoolean(const cobra::BudgetVector< uint64_t > &sig, uint32_t num_vars,
+                           uint32_t bitwidth) {
             const uint64_t c = sig[0];
             uint64_t k       = 0;
             for (size_t i = 1; i < sig.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 const uint64_t r = ModSub(sig[i], c, bitwidth);
                 if (r == 0) { continue; }
                 if (k == 0) {
@@ -1251,8 +1111,9 @@ namespace cobra {
             }
             if (k == 0) { return std::nullopt; }
 
-            std::vector< uint64_t > bool_sig(sig.size());
+            cobra::BudgetVector< uint64_t > bool_sig(sig.size());
             for (size_t i = 0; i < sig.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 bool_sig[i] = ModSub(sig[i], c, bitwidth) == 0 ? 0 : 1;
             }
 
@@ -1282,20 +1143,18 @@ namespace cobra {
 
         // Flatten `e` (scaled by `coeff`) into signed additive terms plus an
         // accumulated constant. Constant multipliers fold into the coefficient.
-        void FlattenAdditive(
-            const Expr &e, uint64_t coeff, uint32_t bitwidth,
-            std::vector< AdditiveTerm > &terms, uint64_t &constant
-        ) {
+        void FlattenAdditive(const Expr &e, uint64_t coeff, uint32_t bitwidth,
+                             cobra::BudgetVector< AdditiveTerm > &terms, uint64_t &constant) {
             switch (e.kind) {
                 case Expr::Kind::kAdd:
                     for (const auto &child : e.children) {
+                        ::cobra::budget::Checkpoint();
                         FlattenAdditive(*child, coeff, bitwidth, terms, constant);
                     }
                     return;
                 case Expr::Kind::kNeg:
-                    FlattenAdditive(
-                        *e.children[0], ModNeg(coeff, bitwidth), bitwidth, terms, constant
-                    );
+                    FlattenAdditive(*e.children[0], ModNeg(coeff, bitwidth), bitwidth, terms,
+                                    constant);
                     return;
                 case Expr::Kind::kConstant:
                     constant =
@@ -1304,20 +1163,16 @@ namespace cobra {
                 case Expr::Kind::kMul:
                     if (e.children.size() == 2 && e.children[0]->kind == Expr::Kind::kConstant)
                     {
-                        FlattenAdditive(
-                            *e.children[1],
-                            ModMul(coeff, e.children[0]->constant_val, bitwidth), bitwidth,
-                            terms, constant
-                        );
+                        FlattenAdditive(*e.children[1],
+                                        ModMul(coeff, e.children[0]->constant_val, bitwidth),
+                                        bitwidth, terms, constant);
                         return;
                     }
                     if (e.children.size() == 2 && e.children[1]->kind == Expr::Kind::kConstant)
                     {
-                        FlattenAdditive(
-                            *e.children[0],
-                            ModMul(coeff, e.children[1]->constant_val, bitwidth), bitwidth,
-                            terms, constant
-                        );
+                        FlattenAdditive(*e.children[0],
+                                        ModMul(coeff, e.children[1]->constant_val, bitwidth),
+                                        bitwidth, terms, constant);
                         return;
                     }
                     terms.push_back({ coeff, &e });
@@ -1331,14 +1186,15 @@ namespace cobra {
         // Mark pool terms matching each of `need` (exact coeff + structural
         // atom) as consumed. Returns false (leaving `consumed` unchanged) when
         // any needed term is absent.
-        bool ConsumeTerms(
-            const std::vector< AdditiveTerm > &pool, const std::vector< AdditiveTerm > &need,
-            std::vector< bool > &consumed
-        ) {
+        bool ConsumeTerms(const cobra::BudgetVector< AdditiveTerm > &pool,
+                          const cobra::BudgetVector< AdditiveTerm > &need,
+                          cobra::BudgetVector< bool > &consumed) {
             auto trial = consumed;
             for (const auto &nt : need) {
+                ::cobra::budget::Checkpoint();
                 bool found = false;
                 for (size_t i = 0; i < pool.size(); ++i) {
+                    ::cobra::budget::Checkpoint();
                     if (trial[i]) { continue; }
                     if (pool[i].coeff == nt.coeff
                         && ExprStructurallyEqual(*pool[i].atom, *nt.atom))
@@ -1354,13 +1210,15 @@ namespace cobra {
             return true;
         }
 
-        std::unique_ptr< Expr > RebuildAdditive(
-            const std::vector< AdditiveTerm > &pool, const std::vector< bool > &consumed,
-            uint64_t constant, std::unique_ptr< Expr > extra, uint32_t bitwidth
-        ) {
+        std::unique_ptr< Expr > RebuildAdditive(const cobra::BudgetVector< AdditiveTerm > &pool,
+                                                const cobra::BudgetVector< bool > &consumed,
+                                                uint64_t constant,
+                                                std::unique_ptr< Expr > extra,
+                                                uint32_t bitwidth) {
             std::unique_ptr< Expr > result;
             if (constant != 0) { result = Expr::Constant(constant); }
             for (size_t i = 0; i < pool.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (consumed[i]) { continue; }
                 auto term = ApplyCoefficient(CloneExpr(*pool[i].atom), pool[i].coeff, bitwidth);
                 result =
@@ -1377,19 +1235,22 @@ namespace cobra {
         // candidate reuses original's variable indices, so an identity var_map
         // over [0, max_index] is sufficient (no densification needed).
         bool VerifyRecovery(const Expr &original, const Expr &candidate, uint32_t bitwidth) {
-            std::vector< uint32_t > support;
+            cobra::BudgetVector< uint32_t > support;
             CollectSupport(original, support);
             uint32_t num_vars = 0;
-            for (uint32_t v : support) { num_vars = std::max(num_vars, v + 1); }
+            for (uint32_t v : support) {
+                ::cobra::budget::Checkpoint();
+                num_vars = std::max(num_vars, v + 1);
+            }
             return FullWidthCheck(original, num_vars, candidate, {}, bitwidth).passed;
         }
 
         // Attempt to collapse the inclusion-exclusion pattern anchored at the
         // AND term `terms[and_idx]`. Returns the rewritten expression on success.
-        std::optional< std::unique_ptr< Expr > > TryRecoverDisjunctionAt(
-            const std::vector< AdditiveTerm > &terms, uint64_t constant, size_t and_idx,
-            const Expr &expr, uint32_t bitwidth
-        ) {
+        std::optional< std::unique_ptr< Expr > >
+        TryRecoverDisjunctionAt(const cobra::BudgetVector< AdditiveTerm > &terms,
+                                uint64_t constant, size_t and_idx, const Expr &expr,
+                                uint32_t bitwidth) {
             const Expr *and_atom = terms[and_idx].atom;
             if (and_atom->kind != Expr::Kind::kAnd || and_atom->children.size() != 2) {
                 return std::nullopt;
@@ -1397,26 +1258,23 @@ namespace cobra {
             const uint64_t c = ModNeg(terms[and_idx].coeff, bitwidth);
             if (c == 0) { return std::nullopt; }
 
-            std::vector< AdditiveTerm > a_terms;
-            std::vector< AdditiveTerm > b_terms;
+            cobra::BudgetVector< AdditiveTerm > a_terms;
+            cobra::BudgetVector< AdditiveTerm > b_terms;
             uint64_t a_const = 0;
             uint64_t b_const = 0;
             FlattenAdditive(*and_atom->children[0], c, bitwidth, a_terms, a_const);
             FlattenAdditive(*and_atom->children[1], c, bitwidth, b_terms, b_const);
 
-            std::vector< bool > consumed(terms.size(), false);
+            cobra::BudgetVector< bool > consumed(terms.size(), false);
             consumed[and_idx] = true;
             if (!ConsumeTerms(terms, a_terms, consumed)) { return std::nullopt; }
             if (!ConsumeTerms(terms, b_terms, consumed)) { return std::nullopt; }
 
             const uint64_t new_constant =
                 ModSub(ModSub(constant, a_const, bitwidth), b_const, bitwidth);
-            auto or_term = ApplyCoefficient(
-                Expr::BitwiseOr(
-                    CloneExpr(*and_atom->children[0]), CloneExpr(*and_atom->children[1])
-                ),
-                c, bitwidth
-            );
+            auto or_term = ApplyCoefficient(Expr::BitwiseOr(CloneExpr(*and_atom->children[0]),
+                                                            CloneExpr(*and_atom->children[1])),
+                                            c, bitwidth);
             auto candidate =
                 RebuildAdditive(terms, consumed, new_constant, std::move(or_term), bitwidth);
 
@@ -1436,6 +1294,7 @@ namespace cobra {
             switch (e.kind) {
                 case Expr::Kind::kAdd:
                     for (const auto &child : e.children) {
+                        ::cobra::budget::Checkpoint();
                         if (AdditiveHasBinaryAnd(*child)) { return true; }
                     }
                     return false;
@@ -1464,20 +1323,24 @@ namespace cobra {
                 return std::nullopt;
             }
             if (!AdditiveHasBinaryAnd(expr)) { return std::nullopt; }
-            std::vector< AdditiveTerm > terms;
+            cobra::BudgetVector< AdditiveTerm > terms;
             uint64_t constant = 0;
             FlattenAdditive(expr, 1, bitwidth, terms, constant);
 
             for (size_t i = 0; i < terms.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 auto recovered = TryRecoverDisjunctionAt(terms, constant, i, expr, bitwidth);
                 if (recovered.has_value()) { return recovered; }
             }
             return std::nullopt;
         }
 
-        void FlattenXor(const Expr &e, std::vector< const Expr * > &out) {
+        void FlattenXor(const Expr &e, cobra::BudgetVector< const Expr * > &out) {
             if (e.kind == Expr::Kind::kXor) {
-                for (const auto &child : e.children) { FlattenXor(*child, out); }
+                for (const auto &child : e.children) {
+                    ::cobra::budget::Checkpoint();
+                    FlattenXor(*child, out);
+                }
                 return;
             }
             out.push_back(&e);
@@ -1488,20 +1351,22 @@ namespace cobra {
         // odd number of times. Universally sound; a FullWidthCheck backstops the
         // structural equality. Unlike the signature path, this fires even when
         // the surviving operand has a degenerate {0,1} signature.
-        std::optional< std::unique_ptr< Expr > >
-        TryXorSelfCancel(const Expr &expr, uint32_t bitwidth) {
+        std::optional< std::unique_ptr< Expr > > TryXorSelfCancel(const Expr &expr,
+                                                                  uint32_t bitwidth) {
             if (expr.kind != Expr::Kind::kXor) { return std::nullopt; }
 
-            std::vector< const Expr * > operands;
+            cobra::BudgetVector< const Expr * > operands;
             FlattenXor(expr, operands);
 
-            std::vector< bool > consumed(operands.size(), false);
-            std::vector< const Expr * > survivors;
+            cobra::BudgetVector< bool > consumed(operands.size(), false);
+            cobra::BudgetVector< const Expr * > survivors;
             for (size_t i = 0; i < operands.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (consumed[i]) { continue; }
                 size_t count = 1;
                 consumed[i]  = true;
                 for (size_t j = i + 1; j < operands.size(); ++j) {
+                    ::cobra::budget::Checkpoint();
                     if (!consumed[j] && ExprStructurallyEqual(*operands[i], *operands[j])) {
                         consumed[j] = true;
                         ++count;
@@ -1518,6 +1383,7 @@ namespace cobra {
             } else {
                 result = CloneExpr(*survivors[0]);
                 for (size_t i = 1; i < survivors.size(); ++i) {
+                    ::cobra::budget::Checkpoint();
                     result = Expr::BitwiseXor(std::move(result), CloneExpr(*survivors[i]));
                 }
             }
@@ -1529,7 +1395,8 @@ namespace cobra {
     } // namespace
 
     std::optional< std::unique_ptr< Expr > >
-    MatchPattern(const std::vector< uint64_t > &sig, uint32_t num_vars, uint32_t bitwidth) {
+    MatchPattern(const cobra::BudgetVector< uint64_t > &sig, uint32_t num_vars,
+                 uint32_t bitwidth) {
         COBRA_ZONE_N("MatchPattern");
         COBRA_TRACE("PatternMatcher", "MatchPattern: vars={} bitwidth={}", num_vars, bitwidth);
 
@@ -1567,9 +1434,10 @@ namespace cobra {
         return result;
     }
 
-    std::unique_ptr< Expr >
-    SimplifyPatternSubtrees(std::unique_ptr< Expr > expr, uint32_t bitwidth) {
+    std::unique_ptr< Expr > SimplifyPatternSubtrees(std::unique_ptr< Expr > expr,
+                                                    uint32_t bitwidth) {
         for (auto &child : expr->children) {
+            ::cobra::budget::Checkpoint();
             child = SimplifyPatternSubtrees(std::move(child), bitwidth);
         }
 
@@ -1595,6 +1463,7 @@ namespace cobra {
         }
         // No cancellation here: recurse into children to handle nested chains.
         for (auto &child : expr->children) {
+            ::cobra::budget::Checkpoint();
             child = SimplifyXorChains(std::move(child), bitwidth);
         }
         return expr;

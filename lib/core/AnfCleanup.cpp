@@ -1,4 +1,5 @@
 #include "cobra/core/AnfCleanup.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/PackedAnf.h"
 #include <algorithm>
@@ -31,11 +32,15 @@ namespace cobra {
 
         // Cost of a raw ANF XOR-tree without building Expr.
         // Equal to ExprCost(EmitRawAnf(form)).
-        uint32_t RawAnfCost(const std::vector< uint32_t > &monomials, uint8_t constant_bit) {
+        uint32_t RawAnfCost(const cobra::BudgetVector< uint32_t > &monomials,
+                            uint8_t constant_bit) {
             const uint32_t kN = static_cast< uint32_t >(monomials.size()) + constant_bit;
             if (kN == 0) { return 1; }
             uint32_t leaf_cost = constant_bit;
-            for (const uint32_t m : monomials) { leaf_cost += MonomialExprCost(m); }
+            for (const uint32_t m : monomials) {
+                ::cobra::budget::Checkpoint();
+                leaf_cost += MonomialExprCost(m);
+            }
             return leaf_cost + (kN > 1 ? kN - 1 : 0);
         }
 
@@ -50,23 +55,25 @@ namespace cobra {
         }
 
         std::unique_ptr< Expr > BuildMonomial(uint32_t mask) {
-            std::vector< uint32_t > vars;
+            cobra::BudgetVector< uint32_t > vars;
             uint32_t m = mask;
             while (m != 0) {
+                ::cobra::budget::Checkpoint();
                 vars.push_back(static_cast< uint32_t >(std::countr_zero(m)));
                 m &= m - 1;
             }
             if (vars.size() == 1) { return Expr::Variable(vars[0]); }
             auto result = Expr::Variable(vars[0]);
             for (size_t i = 1; i < vars.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 result = Expr::BitwiseAnd(std::move(result), Expr::Variable(vars[i]));
             }
             return result;
         }
 
-        std::unique_ptr< Expr > XorTree(
-            std::vector< std::unique_ptr< Expr > > &terms, size_t lo, size_t hi
-        ) { // NOLINT(readability-identifier-naming)
+        std::unique_ptr< Expr > XorTree(cobra::BudgetVector< std::unique_ptr< Expr > > &terms,
+                                        size_t lo,
+                                        size_t hi) { // NOLINT(readability-identifier-naming)
             if (hi - lo == 1) { return std::move(terms[lo]); }
             const size_t mid = lo + ((hi - lo) / 2);
             auto left        = XorTree(terms, lo, mid);
@@ -78,16 +85,19 @@ namespace cobra {
             if (expr.kind != Expr::Kind::kOr) { return 0; }
             uint32_t deepest = 0;
             for (const auto &child : expr.children) {
+                ::cobra::budget::Checkpoint();
                 deepest = std::max(deepest, CountOrChainDepth(*child));
             }
             return 1 + deepest;
         }
 
-        std::optional< uint32_t > DetectOrFamily(const std::vector< uint32_t > &monomials) {
+        std::optional< uint32_t >
+        DetectOrFamily(const cobra::BudgetVector< uint32_t > &monomials) {
             if (monomials.empty()) { return std::nullopt; }
 
             uint32_t var_union = 0;
             for (const uint32_t m : monomials) {
+                ::cobra::budget::Checkpoint();
                 if (std::has_single_bit(m)) { var_union |= m; }
             }
             if (var_union == 0) { return std::nullopt; }
@@ -96,21 +106,24 @@ namespace cobra {
             const size_t kExpected = (1ULL << kNv) - 1;
             if (monomials.size() != kExpected) { return std::nullopt; }
 
-            std::vector< uint32_t > bits;
+            cobra::BudgetVector< uint32_t > bits;
             uint32_t tmp = var_union;
             while (tmp != 0u) {
+                ::cobra::budget::Checkpoint();
                 bits.push_back(tmp & (~tmp + 1));
                 tmp &= tmp - 1;
             }
 
             // Use unordered_set — monomials are sorted by monomial_less,
             // NOT numeric order, so binary_search would be UB
-            std::unordered_set< uint32_t > mono_set(monomials.begin(), monomials.end());
+            cobra::BudgetSet< uint32_t > mono_set(monomials.begin(), monomials.end());
 
             const size_t kTotal = 1ULL << bits.size();
             for (size_t s = 1; s < kTotal; ++s) {
+                ::cobra::budget::Checkpoint();
                 uint32_t mask = 0;
                 for (size_t b = 0; b < bits.size(); ++b) {
+                    ::cobra::budget::Checkpoint();
                     if ((s & (1ULL << b)) != 0u) { mask |= bits[b]; }
                 }
                 if (!mono_set.contains(mask)) { return std::nullopt; }
@@ -119,14 +132,16 @@ namespace cobra {
         }
 
         std::unique_ptr< Expr > BuildOrChain(uint32_t var_mask) {
-            std::vector< uint32_t > vars;
+            cobra::BudgetVector< uint32_t > vars;
             uint32_t m = var_mask;
             while (m != 0u) {
+                ::cobra::budget::Checkpoint();
                 vars.push_back(static_cast< uint32_t >(std::countr_zero(m)));
                 m &= m - 1;
             }
             auto result = Expr::Variable(vars[0]);
             for (size_t i = 1; i < vars.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 result = Expr::BitwiseOr(std::move(result), Expr::Variable(vars[i]));
             }
             return result;
@@ -135,27 +150,33 @@ namespace cobra {
         struct FactorCandidate
         {
             uint32_t factor_mask;
-            std::vector< uint32_t > covered_indices;
+            cobra::BudgetVector< uint32_t > covered_indices;
         };
 
         std::optional< FactorCandidate > FindBestFactor(const AnfForm &form) {
             if (form.monomials.size() < 2) { return std::nullopt; }
 
             // Collect candidate factors: single vars + var-pairs
-            std::vector< uint32_t > candidates;
+            cobra::BudgetVector< uint32_t > candidates;
             uint32_t all_vars = 0;
-            for (const uint32_t m : form.monomials) { all_vars |= m; }
+            for (const uint32_t m : form.monomials) {
+                ::cobra::budget::Checkpoint();
+                all_vars |= m;
+            }
 
             // Single variables
             uint32_t tmp = all_vars;
             while (tmp != 0u) {
+                ::cobra::budget::Checkpoint();
                 candidates.push_back(tmp & (~tmp + 1));
                 tmp &= tmp - 1;
             }
 
             // Variable pairs (intersections of monomial pairs)
             for (size_t i = 0; i < form.monomials.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 for (size_t j = i + 1; j < form.monomials.size(); ++j) {
+                    ::cobra::budget::Checkpoint();
                     const uint32_t kCommon = form.monomials[i] & form.monomials[j];
                     if (kCommon != 0 && std::popcount(kCommon) >= 2) {
                         candidates.push_back(kCommon);
@@ -164,16 +185,17 @@ namespace cobra {
             }
 
             std::sort(candidates.begin(), candidates.end());
-            candidates.erase(
-                std::unique(candidates.begin(), candidates.end()), candidates.end()
-            );
+            candidates.erase(std::unique(candidates.begin(), candidates.end()),
+                             candidates.end());
 
             std::optional< FactorCandidate > best;
             uint32_t best_saving = 0;
 
             for (const uint32_t cand : candidates) {
-                std::vector< uint32_t > covered;
+                ::cobra::budget::Checkpoint();
+                cobra::BudgetVector< uint32_t > covered;
                 for (size_t i = 0; i < form.monomials.size(); ++i) {
+                    ::cobra::budget::Checkpoint();
                     if ((form.monomials[i] & cand) == cand) {
                         covered.push_back(static_cast< uint32_t >(i));
                     }
@@ -185,6 +207,7 @@ namespace cobra {
                 inner.constant_bit = 0;
                 inner.num_vars     = form.num_vars;
                 for (const uint32_t idx : covered) {
+                    ::cobra::budget::Checkpoint();
                     const uint32_t stripped = form.monomials[idx] & ~cand;
                     if (stripped == 0) {
                         inner.constant_bit = 1;
@@ -196,9 +219,10 @@ namespace cobra {
 
                 // Compute raw cost of covered terms without building
                 // Expr trees — pure arithmetic on bitmasks.
-                std::vector< uint32_t > covered_monos;
+                cobra::BudgetVector< uint32_t > covered_monos;
                 covered_monos.reserve(covered.size());
                 for (const uint32_t idx : covered) {
+                    ::cobra::budget::Checkpoint();
                     covered_monos.push_back(form.monomials[idx]);
                 }
                 const uint32_t kRawCost = RawAnfCost(covered_monos, 0);
@@ -228,22 +252,26 @@ namespace cobra {
         struct PartialOrCandidate
         {
             uint32_t var_mask;
-            std::vector< uint32_t > family_masks;
+            cobra::BudgetVector< uint32_t > family_masks;
         };
 
         std::optional< PartialOrCandidate >
-        FindPartialOr(const std::vector< uint32_t > &monomials) {
+        FindPartialOr(const cobra::BudgetVector< uint32_t > &monomials) {
             if (monomials.size() < 3) { return std::nullopt; }
 
-            std::unordered_set< uint32_t > mono_set(monomials.begin(), monomials.end());
+            cobra::BudgetSet< uint32_t > mono_set(monomials.begin(), monomials.end());
 
             // Collect individual variable bits
             uint32_t all_vars = 0;
-            for (const uint32_t m : monomials) { all_vars |= m; }
+            for (const uint32_t m : monomials) {
+                ::cobra::budget::Checkpoint();
+                all_vars |= m;
+            }
 
-            std::vector< uint32_t > var_bits;
+            cobra::BudgetVector< uint32_t > var_bits;
             uint32_t tmp = all_vars;
             while (tmp != 0u) {
+                ::cobra::budget::Checkpoint();
                 var_bits.push_back(tmp & (~tmp + 1));
                 tmp &= tmp - 1;
             }
@@ -256,11 +284,13 @@ namespace cobra {
 
             const uint32_t kLimit = 1U << kNv;
             for (uint32_t s = 3; s < kLimit; ++s) {
+                ::cobra::budget::Checkpoint();
                 const int kSubsetSize = std::popcount(s);
                 if (kSubsetSize < 2) { continue; }
 
                 uint32_t var_mask = 0;
                 for (size_t b = 0; b < static_cast< size_t >(kNv); ++b) {
+                    ::cobra::budget::Checkpoint();
                     if ((s & (1U << b)) != 0u) { var_mask |= var_bits[b]; }
                 }
 
@@ -270,10 +300,11 @@ namespace cobra {
 
                 // Check all nonempty submasks of var_mask exist
                 bool all_present = true;
-                std::vector< uint32_t > family_masks;
+                cobra::BudgetVector< uint32_t > family_masks;
                 family_masks.reserve(kFamilySize);
 
                 for (uint32_t sub = var_mask; sub > 0; sub = (sub - 1) & var_mask) {
+                    ::cobra::budget::Checkpoint();
                     if (!mono_set.contains(sub)) {
                         all_present = false;
                         break;
@@ -350,11 +381,13 @@ namespace cobra {
             ? 1
             : 0; // NOLINT(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
         for (size_t w = 0; w < anf.WordCount(); ++w) {
+            ::cobra::budget::Checkpoint();
             uint64_t bits = anf.Word(w);
             if (w == 0) {
                 bits &= ~1ULL; // skip constant bit
             }
             while (bits != 0u) {
+                ::cobra::budget::Checkpoint();
                 const auto kBit = static_cast< uint32_t >(std::countr_zero(bits));
                 form.monomials.push_back(static_cast< uint32_t >((w * 64) + kBit));
                 bits &= bits - 1; // clear lowest set bit
@@ -365,9 +398,12 @@ namespace cobra {
     }
 
     std::unique_ptr< Expr > EmitRawAnf(const AnfForm &form) {
-        std::vector< std::unique_ptr< Expr > > terms;
+        cobra::BudgetVector< std::unique_ptr< Expr > > terms;
         if (form.constant_bit != 0u) { terms.push_back(Expr::Constant(1)); }
-        for (const uint32_t mask : form.monomials) { terms.push_back(BuildMonomial(mask)); }
+        for (const uint32_t mask : form.monomials) {
+            ::cobra::budget::Checkpoint();
+            terms.push_back(BuildMonomial(mask));
+        }
         if (terms.empty()) { return Expr::Constant(0); }
         if (terms.size() == 1) { return std::move(terms[0]); }
         return XorTree(terms, 0, terms.size());
@@ -423,14 +459,14 @@ namespace cobra {
         if (partial.has_value()) {
             auto or_expr = BuildOrChain(partial->var_mask);
 
-            std::unordered_set< uint32_t > family_set(
-                partial->family_masks.begin(), partial->family_masks.end()
-            );
+            cobra::BudgetSet< uint32_t > family_set(partial->family_masks.begin(),
+                                                    partial->family_masks.end());
 
             AnfForm remainder; // NOLINT(misc-const-correctness)
             remainder.constant_bit = form.constant_bit;
             remainder.num_vars     = form.num_vars;
             for (const uint32_t m : form.monomials) {
+                ::cobra::budget::Checkpoint();
                 if (!family_set.contains(m)) { remainder.monomials.push_back(m); }
             }
 
@@ -448,13 +484,17 @@ namespace cobra {
         // Rule 3: Common-cube factoring
         auto factor = FindBestFactor(form);
         if (factor.has_value()) {
-            std::vector< bool > used(form.monomials.size(), false);
-            for (const uint32_t idx : factor->covered_indices) { used[idx] = true; }
+            cobra::BudgetVector< bool > used(form.monomials.size(), false);
+            for (const uint32_t idx : factor->covered_indices) {
+                ::cobra::budget::Checkpoint();
+                used[idx] = true;
+            }
 
             AnfForm inner; // NOLINT(misc-const-correctness)
             inner.constant_bit = 0;
             inner.num_vars     = form.num_vars;
             for (const uint32_t idx : factor->covered_indices) {
+                ::cobra::budget::Checkpoint();
                 const uint32_t stripped = form.monomials[idx] & ~factor->factor_mask;
                 if (stripped == 0) {
                     inner.constant_bit = 1;
@@ -472,6 +512,7 @@ namespace cobra {
             remainder.constant_bit = form.constant_bit;
             remainder.num_vars     = form.num_vars;
             for (size_t i = 0; i < form.monomials.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (!used[i]) { remainder.monomials.push_back(form.monomials[i]); }
             }
 

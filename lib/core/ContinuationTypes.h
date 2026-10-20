@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/BitwiseDecomposer.h"
 #include "cobra/core/Expr.h"
@@ -29,11 +30,11 @@ namespace cobra {
         uint32_t var_k;
         GateKind gate;
         uint64_t add_coeff;
-        std::vector< uint32_t > active_context_indices;
+        cobra::BudgetVector< uint32_t > active_context_indices;
         GroupId parent_group_id;
         std::optional< Evaluator > parent_eval;
-        std::vector< std::string > parent_real_vars;
-        std::vector< uint32_t > parent_original_indices;
+        cobra::BudgetVector< std::string > parent_real_vars;
+        cobra::BudgetVector< uint32_t > parent_original_indices;
         uint32_t parent_num_vars                      = 0;
         bool parent_needs_original_space_verification = true;
     };
@@ -44,8 +45,8 @@ namespace cobra {
         ExtractOp op;
         GroupId parent_group_id;
         std::optional< Evaluator > parent_eval;
-        std::vector< std::string > parent_real_vars;
-        std::vector< uint32_t > parent_original_indices;
+        cobra::BudgetVector< std::string > parent_real_vars;
+        cobra::BudgetVector< uint32_t > parent_original_indices;
         uint32_t parent_num_vars                      = 0;
         bool parent_needs_original_space_verification = true;
     };
@@ -55,15 +56,15 @@ namespace cobra {
         std::unique_ptr< Expr > prefix_expr;
         RemainderOrigin origin;
         Evaluator remainder_eval;
-        std::vector< uint64_t > source_sig;
-        std::vector< uint32_t > remainder_support;
+        cobra::BudgetVector< uint64_t > source_sig;
+        cobra::BudgetVector< uint32_t > remainder_support;
         uint8_t prefix_degree = 0;
         std::optional< GroupId > parent_group_id;
         // Target-local context for verification. When target_vars is
         // non-empty, recombination verifies against target_eval in
         // the target variable space instead of ctx.original_vars.
         Evaluator target_eval;
-        std::vector< std::string > target_vars;
+        cobra::BudgetVector< std::string > target_vars;
     };
 
     struct OperandRewriteCont
@@ -91,30 +92,31 @@ namespace cobra {
         uint32_t outer_var_index;
         std::unique_ptr< Expr > subtree;
         uint64_t structural_hash = 0;
-        std::vector< uint32_t > original_support;
+        cobra::BudgetVector< uint32_t > original_support;
     };
 
     struct LiftedSubstituteCont
     {
-        std::vector< LiftedBinding > bindings;
-        std::vector< std::string > outer_vars;
+        cobra::BudgetVector< LiftedBinding > bindings;
+        cobra::BudgetVector< std::string > outer_vars;
         uint32_t original_var_count = 0;
         std::optional< Evaluator > original_eval;
-        std::vector< std::string > original_vars;
-        std::vector< uint64_t > source_sig;
+        cobra::BudgetVector< std::string > original_vars;
+        cobra::BudgetVector< uint64_t > source_sig;
     };
 
-    using ContinuationData = std::variant<
-        std::monostate, BitwiseComposeCont, HybridComposeCont, RemainderRecombineCont,
-        OperandRewriteCont, ProductCollapseCont, LiftedSubstituteCont >;
+    using ContinuationData =
+        std::variant< std::monostate, BitwiseComposeCont, HybridComposeCont,
+                      RemainderRecombineCont, OperandRewriteCont, ProductCollapseCont,
+                      LiftedSubstituteCont >;
 
     // Projects a parent's baseline cost for a child work item
     // given the continuation that will recombine the child's result.
     // Conservative initial implementation: returns nullopt for all
     // continuation types (no baseline inheritance).
-    inline std::optional< ExprCost > ProjectBaselineForChild(
-        const std::optional< ExprCost > & /*parent_baseline*/,
-        const ContinuationData & /*continuation*/
+    inline std::optional< ExprCost >
+    ProjectBaselineForChild(const std::optional< ExprCost > & /*parent_baseline*/,
+                            const ContinuationData & /*continuation*/
     ) {
         return std::nullopt;
     }

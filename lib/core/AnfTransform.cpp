@@ -1,5 +1,6 @@
 #include "cobra/core/AnfTransform.h"
 #include "cobra/core/AnfCleanup.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/PackedAnf.h"
 #include <algorithm>
@@ -10,12 +11,13 @@
 
 namespace cobra {
 
-    PackedAnf ComputeAnf(const std::vector< uint64_t > &sig, uint32_t num_vars) {
+    PackedAnf ComputeAnf(const cobra::BudgetVector< uint64_t > &sig, uint32_t num_vars) {
         const size_t kN = 1ULL << num_vars;
         PackedAnf anf(kN);
 
         // Pack low bits of signature into the bitvector
         for (size_t i = 0; i < kN; ++i) {
+            ::cobra::budget::Checkpoint();
             if ((sig[i] & 1) != 0u) { anf.Set(i); }
         }
 
@@ -34,17 +36,22 @@ namespace cobra {
 
         const uint32_t kIntra = std::min(num_vars, 6U);
         for (uint32_t i = 0; i < kIntra; ++i) {
+            ::cobra::budget::Checkpoint();
             const size_t kShift = 1ULL << i;
             for (size_t w = 0; w < anf.WordCount(); ++w) {
+                ::cobra::budget::Checkpoint();
                 anf.Word(w) ^= (anf.Word(w) & kMasks[i]) << kShift;
             }
         }
 
         // Inter-word stages (step >= 64): XOR whole words
         for (uint32_t i = 6; i < num_vars; ++i) {
+            ::cobra::budget::Checkpoint();
             const size_t kWordStep = 1ULL << (i - 6);
             for (size_t w = kWordStep; w < anf.WordCount(); w += 2 * kWordStep) {
+                ::cobra::budget::Checkpoint();
                 for (size_t k = 0; k < kWordStep; ++k) {
+                    ::cobra::budget::Checkpoint();
                     anf.Word(w + k) ^= anf.Word(w - kWordStep + k);
                 }
             }

@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 #include <cstdint>
@@ -11,22 +12,21 @@ namespace cobra {
     std::unique_ptr< Expr > BuildAndProduct(uint64_t mask);
 
     /// Apply a coefficient to an expression: 1*e → e, -1*e → -e, c*e → c*e.
-    std::unique_ptr< Expr > ApplyCoefficient(
-        std::unique_ptr< Expr > expr, uint64_t coeff, uint32_t bitwidth
-    ); // NOLINT(readability-identifier-naming)
+    std::unique_ptr< Expr >
+    ApplyCoefficient(std::unique_ptr< Expr > expr, uint64_t coeff,
+                     uint32_t bitwidth); // NOLINT(readability-identifier-naming)
 
     /// Rewrite every kVariable node's var_index through index_map.
-    void RemapVarIndices(Expr &expr, const std::vector< uint32_t > &index_map);
+    void RemapVarIndices(Expr &expr, const cobra::BudgetVector< uint32_t > &index_map);
 
     /// Deep structural equality: same kind, constant, var_index, and children
     /// (in order). Unlike std::hash<Expr> this never reports false positives.
     bool ExprStructurallyEqual(const Expr &lhs, const Expr &rhs);
 
     /// Map a subset of variable names to their indices in the full variable list.
-    std::vector< uint32_t > BuildVarSupport(
-        const std::vector< std::string > &all_vars,
-        const std::vector< std::string > &subset_vars
-    );
+    cobra::BudgetVector< uint32_t >
+    BuildVarSupport(const cobra::BudgetVector< std::string > &all_vars,
+                    const cobra::BudgetVector< std::string > &subset_vars);
 
     /// Check if an Expr subtree contains only constants (no variables).
     bool IsConstantSubtree(const Expr &expr);
@@ -37,7 +37,7 @@ namespace cobra {
     /// Append the var_index of every kVariable node (pre-order). Duplicates
     /// are preserved; callers that want a deduplicated support set must
     /// sort + unique the output themselves.
-    void CollectVariables(const Expr &expr, std::vector< uint32_t > &out);
+    void CollectVariables(const Expr &expr, cobra::BudgetVector< uint32_t > &out);
 
     /// Evaluate a constant-only Expr subtree (no variables allowed).
     /// Result is masked to Bitmask(bitwidth).

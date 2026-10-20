@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #ifdef COBRA_ENABLE_TRACE
 
@@ -29,6 +30,7 @@
         do { \
             std::string trace_buf_ = "["; \
             for (size_t trace_i_ = 0; trace_i_ < (sig).size(); ++trace_i_) { \
+                ::cobra::budget::Checkpoint(); \
                 if (trace_i_ > 0) { trace_buf_ += ", "; } \
                 trace_buf_ += std::to_string((sig)[trace_i_]); \
             } \

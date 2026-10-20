@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/CompiledExpr.h"
 #include "cobra/core/Profile.h"
@@ -27,8 +28,8 @@ namespace cobra {
 
     struct EvaluatorWorkspace
     {
-        std::vector< uint64_t > remapped_inputs;
-        std::vector< uint64_t > stack;
+        cobra::BudgetVector< uint64_t > remapped_inputs;
+        cobra::BudgetVector< uint64_t > stack;
     };
 
     // ---------------------------------------------------------------
@@ -61,7 +62,7 @@ namespace cobra {
     class Evaluator
     {
       public:
-        using Function = std::function< uint64_t(const std::vector< uint64_t > &) >;
+        using Function = std::function< uint64_t(const cobra::BudgetVector< uint64_t > &) >;
 
         Evaluator()                                 = default;
         Evaluator(const Evaluator &)                = default;
@@ -81,32 +82,27 @@ namespace cobra {
         // Legacy zero-arity ctor. Sets input_arity_ = 0, signalling
         // "unknown arity — trust the caller's num_vars". Consumers that
         // bound-check against InputArity() must accept 0 as a wildcard.
-        explicit Evaluator(
-            Function fn, EvaluatorTraceKind trace_kind = EvaluatorTraceKind::kNone
-        )
+        explicit Evaluator(Function fn,
+                           EvaluatorTraceKind trace_kind = EvaluatorTraceKind::kNone)
             : fn_(std::move(fn)), trace_kind_(trace_kind) {}
 
         template< typename F >
-            requires (
-                !std::same_as< std::remove_cvref_t< F >, Evaluator >
-                && std::constructible_from< Function, F >
-            )
+            requires (!std::same_as< std::remove_cvref_t< F >, Evaluator >
+                      && std::constructible_from< Function, F >)
         Evaluator(F &&fn) // NOLINT(google-explicit-constructor)
             : Evaluator(Function(std::forward< F >(fn))) {}
 
-        static Evaluator FromExpr(
-            const Expr &expr, uint32_t bitwidth,
-            EvaluatorTraceKind trace_kind = EvaluatorTraceKind::kNone
-        ) {
+        static Evaluator FromExpr(const Expr &expr, uint32_t bitwidth,
+                                  EvaluatorTraceKind trace_kind = EvaluatorTraceKind::kNone) {
             return FromCompiled(
-                std::make_shared< CompiledExpr >(CompileExpr(expr, bitwidth)), trace_kind
-            );
+                std::allocate_shared< CompiledExpr >(budget::Allocator< CompiledExpr >{},
+                                                     CompileExpr(expr, bitwidth)),
+                trace_kind);
         }
 
-        static Evaluator FromCompiled(
-            std::shared_ptr< const CompiledExpr > compiled,
-            EvaluatorTraceKind trace_kind = EvaluatorTraceKind::kNone
-        ) {
+        static Evaluator
+        FromCompiled(std::shared_ptr< const CompiledExpr > compiled,
+                     EvaluatorTraceKind trace_kind = EvaluatorTraceKind::kNone) {
             Evaluator eval;
             eval.compiled_    = std::move(compiled);
             eval.input_arity_ = eval.compiled_ ? eval.compiled_->arity : 0;
@@ -124,15 +120,13 @@ namespace cobra {
         }
 
         template< typename F >
-            requires (
-                !std::same_as< std::remove_cvref_t< F >, Evaluator >
-                && std::constructible_from< Function, F >
-            )
+            requires (!std::same_as< std::remove_cvref_t< F >, Evaluator >
+                      && std::constructible_from< Function, F >)
         Evaluator &operator=(F &&fn) {
             return *this = Function(std::forward< F >(fn));
         }
 
-        uint64_t operator()(const std::vector< uint64_t > &vals) const {
+        uint64_t operator()(const cobra::BudgetVector< uint64_t > &vals) const {
             return InvokeTraced([&]() { return InvokeUntraced(vals, nullptr); });
         }
 
@@ -146,18 +140,19 @@ namespace cobra {
             return eval;
         }
 
-        Evaluator Remap(
-            const std::vector< uint32_t > &idx_map, uint32_t source_arity,
-            EvaluatorTraceKind trace_kind
-        ) const {
+        Evaluator Remap(const cobra::BudgetVector< uint32_t > &idx_map, uint32_t source_arity,
+                        EvaluatorTraceKind trace_kind) const {
             if (compiled_) {
                 Evaluator eval = *this;
-                std::vector< uint32_t > composed;
+                cobra::BudgetVector< uint32_t > composed;
                 composed.reserve(idx_map.size());
                 if (input_map_.empty()) {
                     composed = idx_map;
                 } else {
-                    for (uint32_t idx : idx_map) { composed.push_back(input_map_[idx]); }
+                    for (uint32_t idx : idx_map) {
+                        ::cobra::budget::Checkpoint();
+                        composed.push_back(input_map_[idx]);
+                    }
                 }
                 eval.input_map_   = std::move(composed);
                 eval.input_arity_ = static_cast< uint32_t >(idx_map.size());
@@ -170,7 +165,10 @@ namespace cobra {
             // (which may exceed source_arity when lifted variables are
             // remapped through the elimination pipeline).
             uint32_t buf_size = source_arity;
-            for (uint32_t idx : idx_map) { buf_size = std::max(buf_size, idx + 1); }
+            for (uint32_t idx : idx_map) {
+                ::cobra::budget::Checkpoint();
+                buf_size = std::max(buf_size, idx + 1);
+            }
             // The captured `original_vals` is mutable: invocations write
             // reduced_vals into it, then reset to 0 on exit. Concurrent
             // calls on the same Evaluator instance race on this buffer
@@ -183,27 +181,26 @@ namespace cobra {
             // declared arity so InputArity() is meaningful for the
             // function-path branch too.
             return Evaluator(
-                [base, idx_map, original_vals = std::vector< uint64_t >(buf_size, 0)](
-                    const std::vector< uint64_t > &reduced_vals
-                ) mutable -> uint64_t {
+                [base, idx_map, original_vals = cobra::BudgetVector< uint64_t >(buf_size, 0)](
+                    const cobra::BudgetVector< uint64_t > &reduced_vals) mutable -> uint64_t {
                     for (size_t i = 0; i < idx_map.size(); ++i) {
+                        ::cobra::budget::Checkpoint();
                         original_vals[idx_map[i]] = reduced_vals[i];
                     }
                     const uint64_t result = base(original_vals);
                     for (size_t i = 0; i < idx_map.size(); ++i) {
+                        ::cobra::budget::Checkpoint();
                         original_vals[idx_map[i]] = 0;
                     }
                     return result;
                 },
-                static_cast< uint32_t >(idx_map.size()), trace_kind
-            );
+                static_cast< uint32_t >(idx_map.size()), trace_kind);
         }
 
         bool HasCompiledExpr() const { return static_cast< bool >(compiled_); }
 
-        uint64_t EvaluateWithWorkspace(
-            const std::vector< uint64_t > &vals, EvaluatorWorkspace &workspace
-        ) const {
+        uint64_t EvaluateWithWorkspace(const cobra::BudgetVector< uint64_t > &vals,
+                                       EvaluatorWorkspace &workspace) const {
             if (compiled_) { return InvokeUntraced(vals, &workspace); }
             return (*this)(vals);
         }
@@ -246,26 +243,24 @@ namespace cobra {
             return invoke();
         }
 
-        uint64_t InvokeUntraced(
-            const std::vector< uint64_t > &vals, EvaluatorWorkspace *workspace
-        ) const {
+        uint64_t InvokeUntraced(const cobra::BudgetVector< uint64_t > &vals,
+                                EvaluatorWorkspace *workspace) const {
             if (!compiled_) { return fn_(vals); }
 
             EvaluatorWorkspace local_workspace;
             // NOLINTNEXTLINE(readability-identifier-naming)
-            EvaluatorWorkspace &wksp              = workspace ? *workspace : local_workspace;
-            const std::vector< uint64_t > *inputs = &vals;
+            EvaluatorWorkspace &wksp = workspace ? *workspace : local_workspace;
+            const cobra::BudgetVector< uint64_t > *inputs = &vals;
 
             if (!input_map_.empty()) {
                 // Caller must supply at least one value per input_map_
                 // entry; the loop below indexes vals[i] for each entry.
                 // If vals is undersized, the read would be out-of-bounds.
-                assert(
-                    vals.size() >= input_map_.size()
-                    && "Evaluator::InvokeUntraced: vals smaller than remapped arity"
-                );
+                assert(vals.size() >= input_map_.size()
+                       && "Evaluator::InvokeUntraced: vals smaller than remapped arity");
                 size_t remapped_arity = compiled_->arity;
                 for (uint32_t idx : input_map_) {
+                    ::cobra::budget::Checkpoint();
                     remapped_arity = std::max(remapped_arity, static_cast< size_t >(idx) + 1);
                 }
                 if (wksp.remapped_inputs.size() < remapped_arity) {
@@ -273,6 +268,7 @@ namespace cobra {
                 }
                 std::fill(wksp.remapped_inputs.begin(), wksp.remapped_inputs.end(), 0);
                 for (size_t i = 0; i < input_map_.size(); ++i) {
+                    ::cobra::budget::Checkpoint();
                     wksp.remapped_inputs[input_map_[i]] = vals[i];
                 }
                 inputs = &wksp.remapped_inputs;
@@ -283,7 +279,7 @@ namespace cobra {
 
         Function fn_{};
         std::shared_ptr< const CompiledExpr > compiled_{};
-        std::vector< uint32_t > input_map_{};
+        cobra::BudgetVector< uint32_t > input_map_{};
         uint32_t input_arity_          = 0;
         EvaluatorTraceKind trace_kind_ = EvaluatorTraceKind::kNone;
     };

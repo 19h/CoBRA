@@ -1,12 +1,13 @@
 #include "DecompositionPassHelpers.h"
 #include "OrchestratorPasses.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/SignatureEval.h"
 
 namespace cobra {
 
-    std::vector< uint64_t > ComputeDecompositionSignature(
-        const WorkItem &item, const OrchestratorContext &ctx, uint32_t rewrite_gen
-    ) {
+    cobra::BudgetVector< uint64_t >
+    ComputeDecompositionSignature(const WorkItem &item, const OrchestratorContext &ctx,
+                                  uint32_t rewrite_gen) {
         const auto &ast         = std::get< AstPayload >(item.payload);
         const auto *active_sig  = ActiveAstInputSig(item, ctx);
         const auto &active_vars = ActiveAstVars(item, ctx);

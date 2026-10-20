@@ -1,5 +1,6 @@
 #include "cobra/core/SingletonPowerRecovery.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/CoefficientSplitter.h"
 #include "cobra/core/MathUtils.h"
 #include "cobra/core/Profile.h"
@@ -16,15 +17,13 @@ namespace cobra {
     Result< SingletonPowerResult >
     RecoverSingletonPowers(const Evaluator &eval, uint32_t num_vars, uint32_t bitwidth) {
         COBRA_ZONE_N("RecoverSingletonPowers");
-        COBRA_TRACE(
-            "PowerRecovery", "RecoverSingletonPowers: vars={} bitwidth={}", num_vars, bitwidth
-        );
+        COBRA_TRACE("PowerRecovery", "RecoverSingletonPowers: vars={} bitwidth={}", num_vars,
+                    bitwidth);
         if (bitwidth < 2 || bitwidth > 64) {
             return Err< SingletonPowerResult >(
                 CobraError::kNoReduction,
                 "recover_singleton_powers: bitwidth must be 2..64, got "
-                    + std::to_string(bitwidth)
-            );
+                    + std::to_string(bitwidth));
         }
 
         const uint32_t kMaxDegree = DegreeCap(bitwidth);
@@ -38,8 +37,9 @@ namespace cobra {
             uint32_t precision_bits; // bitwidth - twos
         };
 
-        std::vector< DegreeInfo > info(kMaxDegree);
+        cobra::BudgetVector< DegreeInfo > info(kMaxDegree);
         for (uint32_t k = 1; k < kMaxDegree; ++k) {
+            ::cobra::budget::Checkpoint();
             const uint32_t kV    = TwosInFactorial(k);
             const uint32_t kPrec = bitwidth - kV;
             const uint64_t kOdd  = OddPartFactorial(k, kPrec);
@@ -52,12 +52,14 @@ namespace cobra {
         result.bitwidth = bitwidth;
         result.per_var.resize(num_vars, { .bitwidth = bitwidth, .terms = {} });
 
-        std::vector< uint64_t > point(num_vars, 0);
-        std::vector< uint64_t > table(kMaxDegree);
+        cobra::BudgetVector< uint64_t > point(num_vars, 0);
+        cobra::BudgetVector< uint64_t > table(kMaxDegree);
 
         for (uint32_t var = 0; var < num_vars; ++var) {
+            ::cobra::budget::Checkpoint();
             // Step 1: Evaluate univariate slice g_var(t) for t = 0..max_degree-1.
             for (uint32_t t = 0; t < kMaxDegree; ++t) {
+                ::cobra::budget::Checkpoint();
                 point[var] = t;
                 table[t]   = eval(point) & kMask;
             }
@@ -65,16 +67,19 @@ namespace cobra {
 
             // Step 2: Forward differences in-place.
             for (uint32_t k = 1; k < kMaxDegree; ++k) {
+                ::cobra::budget::Checkpoint();
                 // Safe: k >= 1, so when t decrements from k to k-1,
                 // the unsigned comparison (k-1) >= k is false.
                 for (uint32_t t = kMaxDegree - 1; t >= k; --t) {
+                    ::cobra::budget::Checkpoint();
                     table[t] = (table[t] - table[t - 1]) & kMask;
                 }
             }
 
             // Step 3: Recover factorial-basis coefficients.
-            std::vector< UnivariateTerm > terms;
+            cobra::BudgetVector< UnivariateTerm > terms;
             for (uint32_t k = 1; k < kMaxDegree; ++k) {
+                ::cobra::budget::Checkpoint();
                 const uint64_t kDk = table[k];
                 const uint32_t kV  = info[k].twos;
 
@@ -83,8 +88,7 @@ namespace cobra {
                     return Err< SingletonPowerResult >(
                         CobraError::kNoReduction,
                         "singleton-power recovery failed: variable " + std::to_string(var)
-                            + ", degree " + std::to_string(k) + " — divisibility check failed"
-                    );
+                            + ", degree " + std::to_string(k) + " — divisibility check failed");
                 }
 
                 const uint64_t kShifted = kDk >> kV;
@@ -93,8 +97,7 @@ namespace cobra {
 
                 if (kFactorialCoeff != 0) {
                     terms.push_back(
-                        { .degree = static_cast< uint16_t >(k), .coeff = kFactorialCoeff }
-                    );
+                        { .degree = static_cast< uint16_t >(k), .coeff = kFactorialCoeff });
                 }
             }
 

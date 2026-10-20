@@ -1,5 +1,6 @@
 #include "cobra/core/Expr.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include <cstdint>
 #include <memory>
 #include <sstream>
@@ -24,8 +25,8 @@ namespace cobra {
             return e;
         }
 
-        std::unique_ptr< Expr >
-        MakeBinary(Expr::Kind kind, std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs) {
+        std::unique_ptr< Expr > MakeBinary(Expr::Kind kind, std::unique_ptr< Expr > lhs,
+                                           std::unique_ptr< Expr > rhs) {
             auto e  = std::make_unique< Expr >();
             e->kind = kind;
             e->children.reserve(2);
@@ -73,10 +74,9 @@ namespace cobra {
             }
         }
 
-        void RenderImpl(
-            std::ostringstream &out, const Expr &expr,
-            const std::vector< std::string > &var_names, uint32_t bitwidth, int parent_prec
-        ) {
+        void RenderImpl(std::ostringstream &out, const Expr &expr,
+                        const cobra::BudgetVector< std::string > &var_names, uint32_t bitwidth,
+                        int parent_prec) {
             switch (expr.kind) {
                 case Expr::Kind::kConstant: {
                     // SignBitMask(0) returns 0, which causes the
@@ -140,33 +140,33 @@ namespace cobra {
         return e;
     }
 
-    std::unique_ptr< Expr > Expr::Add(
-        std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs
-    ) { // NOLINT(readability-identifier-naming)
+    std::unique_ptr< Expr >
+    Expr::Add(std::unique_ptr< Expr > lhs,
+              std::unique_ptr< Expr > rhs) { // NOLINT(readability-identifier-naming)
         return MakeBinary(Kind::kAdd, std::move(lhs), std::move(rhs));
     }
 
-    std::unique_ptr< Expr > Expr::Mul(
-        std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs
-    ) { // NOLINT(readability-identifier-naming)
+    std::unique_ptr< Expr >
+    Expr::Mul(std::unique_ptr< Expr > lhs,
+              std::unique_ptr< Expr > rhs) { // NOLINT(readability-identifier-naming)
         return MakeBinary(Kind::kMul, std::move(lhs), std::move(rhs));
     }
 
-    std::unique_ptr< Expr > Expr::BitwiseAnd(
-        std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs
-    ) { // NOLINT(readability-identifier-naming)
+    std::unique_ptr< Expr >
+    Expr::BitwiseAnd(std::unique_ptr< Expr > lhs,
+                     std::unique_ptr< Expr > rhs) { // NOLINT(readability-identifier-naming)
         return MakeBinary(Kind::kAnd, std::move(lhs), std::move(rhs));
     }
 
-    std::unique_ptr< Expr > Expr::BitwiseOr(
-        std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs
-    ) { // NOLINT(readability-identifier-naming)
+    std::unique_ptr< Expr >
+    Expr::BitwiseOr(std::unique_ptr< Expr > lhs,
+                    std::unique_ptr< Expr > rhs) { // NOLINT(readability-identifier-naming)
         return MakeBinary(Kind::kOr, std::move(lhs), std::move(rhs));
     }
 
-    std::unique_ptr< Expr > Expr::BitwiseXor(
-        std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs
-    ) { // NOLINT(readability-identifier-naming)
+    std::unique_ptr< Expr >
+    Expr::BitwiseXor(std::unique_ptr< Expr > lhs,
+                     std::unique_ptr< Expr > rhs) { // NOLINT(readability-identifier-naming)
         return MakeBinary(Kind::kXor, std::move(lhs), std::move(rhs));
     }
 
@@ -188,16 +188,20 @@ namespace cobra {
     }
 
     std::unique_ptr< Expr > CloneExpr(const Expr &expr) {
+        budget::Checkpoint();
         auto dst          = std::make_unique< Expr >();
         dst->kind         = expr.kind;
         dst->constant_val = expr.constant_val;
         dst->var_index    = expr.var_index;
-        for (const auto &child : expr.children) { dst->children.push_back(CloneExpr(*child)); }
+        for (const auto &child : expr.children) {
+            ::cobra::budget::Checkpoint();
+            dst->children.push_back(CloneExpr(*child));
+        }
         return dst;
     }
 
-    std::string
-    Render(const Expr &expr, const std::vector< std::string > &var_names, uint32_t bitwidth) {
+    std::string Render(const Expr &expr, const cobra::BudgetVector< std::string > &var_names,
+                       uint32_t bitwidth) {
         std::ostringstream out;
         RenderImpl(out, expr, var_names, bitwidth, 0);
         return out.str();

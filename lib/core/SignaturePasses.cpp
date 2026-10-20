@@ -9,6 +9,7 @@
 #include "cobra/core/AuxVarEliminator.h"
 #include "cobra/core/BitWidth.h"
 #include "cobra/core/BitwiseDecomposer.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Classification.h"
 #include "cobra/core/Classifier.h"
 #include "cobra/core/CoBExprBuilder.h"
@@ -49,9 +50,9 @@ namespace cobra {
             return record;
         }
 
-        WorkItem MakeInlineSignatureItem(
-            const WorkItem &item, const SignatureSubproblemContext &sub_ctx, GroupId group_id
-        ) {
+        WorkItem MakeInlineSignatureItem(const WorkItem &item,
+                                         const SignatureSubproblemContext &sub_ctx,
+                                         GroupId group_id) {
             WorkItem inline_item;
             inline_item.payload                   = SignatureStatePayload{ .ctx = sub_ctx };
             inline_item.features                  = item.features;
@@ -67,13 +68,11 @@ namespace cobra {
             return inline_item;
         }
 
-        bool SubmitNormalizedCandidate(
-            absl::flat_hash_map< GroupId, CompetitionGroup > &groups, GroupId group_id,
-            CandidateRecord record, uint32_t bitwidth
-        ) {
-            return SubmitCandidate(
-                groups, group_id, NormalizeCandidateRecord(std::move(record), bitwidth)
-            );
+        bool
+        SubmitNormalizedCandidate(cobra::BudgetFlatMap< GroupId, CompetitionGroup > &groups,
+                                  GroupId group_id, CandidateRecord record, uint32_t bitwidth) {
+            return SubmitCandidate(groups, group_id,
+                                   NormalizeCandidateRecord(std::move(record), bitwidth));
         }
 
         // Build a mapped evaluator for the reduced variable space.
@@ -82,10 +81,9 @@ namespace cobra {
         // When the reduced space matches the evaluator's space,
         // returns the evaluator directly; otherwise builds a
         // remapping lambda.
-        std::optional< Evaluator > BuildMappedEvaluator(
-            const OrchestratorContext &ctx, const SignatureSubproblemContext &sub_ctx,
-            const WorkItem &item
-        ) {
+        std::optional< Evaluator >
+        BuildMappedEvaluator(const OrchestratorContext &ctx,
+                             const SignatureSubproblemContext &sub_ctx, const WorkItem &item) {
             // Use item-level evaluator override if present (residual
             // or lifted-outer children).  The override's arity may
             // exceed the reduced var count when aux-var elimination
@@ -98,17 +96,15 @@ namespace cobra {
                                           std::views::iota(uint32_t{ 0 }, arity));
                 if (identity_map) { return *item.evaluator_override; }
 
-                return item.evaluator_override->Remap(
-                    sub_ctx.original_indices, arity, EvaluatorTraceKind::kMappedOverride
-                );
+                return item.evaluator_override->Remap(sub_ctx.original_indices, arity,
+                                                      EvaluatorTraceKind::kMappedOverride);
             }
             // Fall back to run-global evaluator.
             if (!ctx.evaluator) { return std::nullopt; }
             if (sub_ctx.real_vars.size() == ctx.original_vars.size()) { return *ctx.evaluator; }
-            return ctx.evaluator->Remap(
-                sub_ctx.original_indices, static_cast< uint32_t >(ctx.original_vars.size()),
-                EvaluatorTraceKind::kMappedGlobal
-            );
+            return ctx.evaluator->Remap(sub_ctx.original_indices,
+                                        static_cast< uint32_t >(ctx.original_vars.size()),
+                                        EvaluatorTraceKind::kMappedGlobal);
         }
 
         struct InlineGroupFrame
@@ -130,9 +126,8 @@ namespace cobra {
                 {
                     return std::nullopt;
                 }
-                return NormalizeCandidateRecord(
-                    std::move(*group_it->second.best), ctx.bitwidth
-                );
+                return NormalizeCandidateRecord(std::move(*group_it->second.best),
+                                                ctx.bitwidth);
             }
 
             OrchestratorContext &ctx;
@@ -141,9 +136,9 @@ namespace cobra {
         };
 
         template< typename Runner >
-        std::optional< CandidateRecord > TryInlinePolynomialTechnique(
-            const WorkItem &item, OrchestratorContext &ctx, Runner &&run
-        ) {
+        std::optional< CandidateRecord > TryInlinePolynomialTechnique(const WorkItem &item,
+                                                                      OrchestratorContext &ctx,
+                                                                      Runner &&run) {
             const auto &sub_ctx = std::get< SignatureStatePayload >(item.payload).ctx;
             InlineGroupFrame frame(ctx);
             auto inline_item = MakeInlineSignatureItem(item, sub_ctx, frame.group_id);
@@ -151,9 +146,8 @@ namespace cobra {
             return frame.TakeWinner();
         }
 
-        bool IsMultivarPolynomialFastPathCandidate(
-            const WorkItem &item, const SignatureSubproblemContext &sub_ctx
-        ) {
+        bool IsMultivarPolynomialFastPathCandidate(const WorkItem &item,
+                                                   const SignatureSubproblemContext &sub_ctx) {
             const auto num_vars = sub_ctx.real_vars.size();
             // Fast-path is intentionally narrower than
             // RunSignatureMultivarPolyRecovery's 6-var envelope: 5-6 var
@@ -180,8 +174,7 @@ namespace cobra {
                     auto singleton_result =
                         RunSignatureSingletonPolyRecovery(prep_result->next.front(), ctx);
                     return singleton_result.has_value();
-                }
-            );
+                });
         }
 
         std::optional< CandidateRecord >
@@ -194,8 +187,7 @@ namespace cobra {
                 item, ctx, [](WorkItem &inline_item, OrchestratorContext &ctx) {
                     auto recovery_result = RunSignatureMultivarPolyRecovery(inline_item, ctx);
                     return recovery_result.has_value();
-                }
-            );
+                });
         }
 
         // Heuristic compactness bound for skipping decomposition when the
@@ -210,10 +202,8 @@ namespace cobra {
                     || item.features.classification->semantic == SemanticClass::kSemilinear);
         }
 
-        bool ShouldSkipDecomposition(
-            const WorkItem &item, const OrchestratorContext &ctx, bool require_root_depth,
-            bool require_global_evaluator
-        ) {
+        bool ShouldSkipDecomposition(const WorkItem &item, const OrchestratorContext &ctx,
+                                     bool require_root_depth, bool require_global_evaluator) {
             if (!item.group_id.has_value() || !HasDecompositionShortcutClass(item)) {
                 return false;
             }
@@ -222,10 +212,8 @@ namespace cobra {
 
             const auto &sub_ctx = std::get< SignatureStatePayload >(item.payload).ctx;
             auto num_vars       = static_cast< uint32_t >(sub_ctx.real_vars.size());
-            return HasVerifiedCandidate(
-                ctx.competition_groups, *item.group_id,
-                VerifiedCandidateDecompositionCostBound(num_vars)
-            );
+            return HasVerifiedCandidate(ctx.competition_groups, *item.group_id,
+                                        VerifiedCandidateDecompositionCostBound(num_vars));
         }
 
         template< typename JoinT >
@@ -239,10 +227,8 @@ namespace cobra {
         }
 
         template< typename JoinT >
-        void EmitJoinRewrite(
-            const JoinT &join, const WorkItem &item, std::unique_ptr< Expr > replacement,
-            PassResult &pr
-        ) {
+        void EmitJoinRewrite(const JoinT &join, const WorkItem &item,
+                             std::unique_ptr< Expr > replacement, PassResult &pr) {
             auto rebuilt_ast = CloneExpr(*join.full_ast);
             bool replaced    = false;
             rebuilt_ast =
@@ -277,16 +263,16 @@ namespace cobra {
             const uint64_t mask = Bitmask(bitwidth);
             uint64_t sum        = 0;
             for (const auto &term : poly.terms) {
+                ::cobra::budget::Checkpoint();
                 if (term.degree >= 3) { break; }
                 sum = (sum + (term.coeff * 2)) & mask;
             }
             return sum;
         }
 
-        PassResult ResolveBitwiseCompose(
-            const BitwiseComposeCont &cont, CompetitionGroup &group, const WorkItem & /*item*/,
-            OrchestratorContext &ctx
-        ) {
+        PassResult ResolveBitwiseCompose(const BitwiseComposeCont &cont,
+                                         CompetitionGroup &group, const WorkItem & /*item*/,
+                                         OrchestratorContext &ctx) {
             PassResult pr;
             pr.disposition = ItemDisposition::kConsumeCurrent;
 
@@ -298,10 +284,9 @@ namespace cobra {
 
                 bool fw_ok = true;
                 if (cont.parent_eval) {
-                    auto check = FullWidthCheckEval(
-                        *cont.parent_eval, cont.parent_num_vars, *composed, ctx.bitwidth
-                    );
-                    fw_ok = check.passed;
+                    auto check = FullWidthCheckEval(*cont.parent_eval, cont.parent_num_vars,
+                                                    *composed, ctx.bitwidth);
+                    fw_ok      = check.passed;
                 }
 
                 if (fw_ok) {
@@ -318,8 +303,7 @@ namespace cobra {
                             .needs_original_space_verification =
                                 cont.parent_needs_original_space_verification,
                         },
-                        ctx.bitwidth
-                    );
+                        ctx.bitwidth);
                 }
             }
 
@@ -331,10 +315,8 @@ namespace cobra {
             return pr;
         }
 
-        PassResult ResolveHybridCompose(
-            const HybridComposeCont &cont, CompetitionGroup &group, const WorkItem & /*item*/,
-            OrchestratorContext &ctx
-        ) {
+        PassResult ResolveHybridCompose(const HybridComposeCont &cont, CompetitionGroup &group,
+                                        const WorkItem & /*item*/, OrchestratorContext &ctx) {
             PassResult pr;
             pr.disposition = ItemDisposition::kConsumeCurrent;
 
@@ -344,10 +326,9 @@ namespace cobra {
 
                 bool fw_ok = true;
                 if (cont.parent_eval) {
-                    auto check = FullWidthCheckEval(
-                        *cont.parent_eval, cont.parent_num_vars, *composed, ctx.bitwidth
-                    );
-                    fw_ok = check.passed;
+                    auto check = FullWidthCheckEval(*cont.parent_eval, cont.parent_num_vars,
+                                                    *composed, ctx.bitwidth);
+                    fw_ok      = check.passed;
                 }
 
                 if (fw_ok) {
@@ -364,8 +345,7 @@ namespace cobra {
                             .needs_original_space_verification =
                                 cont.parent_needs_original_space_verification,
                         },
-                        ctx.bitwidth
-                    );
+                        ctx.bitwidth);
                 }
             }
 
@@ -377,10 +357,9 @@ namespace cobra {
             return pr;
         }
 
-        PassResult ResolveOperandRewrite(
-            const OperandRewriteCont &cont, CompetitionGroup &group, const WorkItem &item,
-            OrchestratorContext &ctx
-        ) {
+        PassResult ResolveOperandRewrite(const OperandRewriteCont &cont,
+                                         CompetitionGroup &group, const WorkItem &item,
+                                         OrchestratorContext &ctx) {
             PassResult pr;
             pr.disposition = ItemDisposition::kConsumeCurrent;
             pr.decision    = PassDecision::kAdvance;
@@ -445,9 +424,8 @@ namespace cobra {
                 try_cand(CloneExpr(*orig.children[0]), CloneExpr(*join->rhs_winner->expr));
             }
             if (join->lhs_winner.has_value() && join->rhs_winner.has_value()) {
-                try_cand(
-                    CloneExpr(*join->lhs_winner->expr), CloneExpr(*join->rhs_winner->expr)
-                );
+                try_cand(CloneExpr(*join->lhs_winner->expr),
+                         CloneExpr(*join->rhs_winner->expr));
             }
 
             const auto parent_group_id = join->parent_group_id;
@@ -472,10 +450,9 @@ namespace cobra {
             return pr;
         }
 
-        PassResult ResolveProductCollapse(
-            const ProductCollapseCont &cont, CompetitionGroup &group, const WorkItem &item,
-            OrchestratorContext &ctx
-        ) {
+        PassResult ResolveProductCollapse(const ProductCollapseCont &cont,
+                                          CompetitionGroup &group, const WorkItem &item,
+                                          OrchestratorContext &ctx) {
             PassResult pr;
             pr.disposition = ItemDisposition::kConsumeCurrent;
             pr.decision    = PassDecision::kAdvance;
@@ -508,9 +485,8 @@ namespace cobra {
             if (!join->x_resolved || !join->y_resolved) { return pr; }
 
             if (join->x_winner.has_value() && join->y_winner.has_value()) {
-                auto candidate = Expr::Mul(
-                    CloneExpr(*join->x_winner->expr), CloneExpr(*join->y_winner->expr)
-                );
+                auto candidate = Expr::Mul(CloneExpr(*join->x_winner->expr),
+                                           CloneExpr(*join->y_winner->expr));
 
                 const auto &orig    = *join->original_expr;
                 const auto bw       = join->bitwidth;
@@ -544,27 +520,28 @@ namespace cobra {
             return pr;
         }
 
-        std::unique_ptr< Expr > SubstituteBindings(
-            const Expr &expr, const std::vector< LiftedBinding > &bindings,
-            uint32_t original_var_count
-        ) {
+        std::unique_ptr< Expr >
+        SubstituteBindings(const Expr &expr,
+                           const cobra::BudgetVector< LiftedBinding > &bindings,
+                           uint32_t original_var_count) {
             if (expr.kind == Expr::Kind::kVariable && expr.var_index >= original_var_count) {
                 for (const auto &b : bindings) {
+                    ::cobra::budget::Checkpoint();
                     if (b.outer_var_index == expr.var_index) { return CloneExpr(*b.subtree); }
                 }
                 return Expr::Variable(expr.var_index);
             }
             auto result = CloneExpr(expr);
             for (auto &child : result->children) {
+                ::cobra::budget::Checkpoint();
                 child = SubstituteBindings(*child, bindings, original_var_count);
             }
             return result;
         }
 
-        PassResult ResolveLiftedSubstitute(
-            const LiftedSubstituteCont &cont, CompetitionGroup &group, const WorkItem &item,
-            OrchestratorContext &ctx
-        ) {
+        PassResult ResolveLiftedSubstitute(const LiftedSubstituteCont &cont,
+                                           CompetitionGroup &group, const WorkItem &item,
+                                           OrchestratorContext &ctx) {
             PassResult pr;
             pr.disposition = ItemDisposition::kConsumeCurrent;
             pr.decision    = PassDecision::kAdvance;
@@ -574,6 +551,7 @@ namespace cobra {
                 if (!group.technique_failures.empty()) {
                     reason = group.technique_failures.front();
                     for (size_t i = 1; i < group.technique_failures.size(); ++i) {
+                        ::cobra::budget::Checkpoint();
                         reason.causes.push_back(group.technique_failures[i].top);
                     }
                 } else {
@@ -629,10 +607,8 @@ namespace cobra {
             // disagreements not visible in the {0,1} signature space.
             // Use the residual-gate probe count to match the sibling
             // ResolveResidualRecombine (line 709 below).
-            auto check          = FullWidthCheckEval(
-                *cont.original_eval, num_vars, *substituted, ctx.bitwidth,
-                kResidualGateProbeCount
-            );
+            auto check = FullWidthCheckEval(*cont.original_eval, num_vars, *substituted,
+                                            ctx.bitwidth, kResidualGateProbeCount);
             if (!check.passed) {
                 pr.decision = PassDecision::kBlocked;
                 pr.reason   = ReasonDetail{
@@ -669,10 +645,9 @@ namespace cobra {
             return pr;
         }
 
-        PassResult ResolveResidualRecombine(
-            const RemainderRecombineCont &cont, CompetitionGroup &group, const WorkItem &item,
-            OrchestratorContext &ctx
-        ) {
+        PassResult ResolveResidualRecombine(const RemainderRecombineCont &cont,
+                                            CompetitionGroup &group, const WorkItem &item,
+                                            OrchestratorContext &ctx) {
             PassResult pr;
             pr.disposition = ItemDisposition::kConsumeCurrent;
             pr.decision    = PassDecision::kAdvance;
@@ -742,18 +717,16 @@ namespace cobra {
             auto cost_info = ComputeCost(*combined);
 
             if (cont.parent_group_id.has_value()) {
-                SubmitNormalizedCandidate(
-                    ctx.competition_groups, *cont.parent_group_id,
-                    CandidateRecord{
-                        .expr                              = std::move(combined),
-                        .cost                              = cost_info.cost,
-                        .verification                      = VerificationState::kVerified,
-                        .real_vars                         = target_vars,
-                        .source_pass                       = PassId::kResidualSupported,
-                        .needs_original_space_verification = false,
-                    },
-                    ctx.bitwidth
-                );
+                SubmitNormalizedCandidate(ctx.competition_groups, *cont.parent_group_id,
+                                          CandidateRecord{
+                                              .expr         = std::move(combined),
+                                              .cost         = cost_info.cost,
+                                              .verification = VerificationState::kVerified,
+                                              .real_vars    = target_vars,
+                                              .source_pass  = PassId::kResidualSupported,
+                                              .needs_original_space_verification = false,
+                                          },
+                                          ctx.bitwidth);
                 release_parent();
                 pr.decision = PassDecision::kAdvance;
             } else {
@@ -791,8 +764,8 @@ namespace cobra {
 
     } // namespace
 
-    std::optional< CandidateRecord >
-    TryReducedPolynomialFastPath(const WorkItem &item, OrchestratorContext &ctx) {
+    std::optional< CandidateRecord > TryReducedPolynomialFastPath(const WorkItem &item,
+                                                                  OrchestratorContext &ctx) {
         if (!std::holds_alternative< SignatureStatePayload >(item.payload)) {
             return std::nullopt;
         }
@@ -860,6 +833,7 @@ namespace cobra {
                     if (!group.technique_failures.empty()) {
                         reason = group.technique_failures.front();
                         for (size_t i = 1; i < group.technique_failures.size(); ++i) {
+                            ::cobra::budget::Checkpoint();
                             reason.causes.push_back(group.technique_failures[i].top);
                         }
                     } else {
@@ -900,8 +874,7 @@ namespace cobra {
                     };
                 }
             },
-            cont
-        );
+            cont);
 
         ctx.competition_groups.erase(group_it);
         return Ok(std::move(result));
@@ -911,8 +884,8 @@ namespace cobra {
     // kSignaturePatternMatch
     // ---------------------------------------------------------------
 
-    Result< PassResult >
-    RunSignaturePatternMatch(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunSignaturePatternMatch(const WorkItem &item,
+                                                  OrchestratorContext &ctx) {
         if (!std::holds_alternative< SignatureStatePayload >(item.payload)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
         }
@@ -924,12 +897,10 @@ namespace cobra {
 
         auto pm = MatchPattern(sig, num_vars, ctx.bitwidth);
         if (!pm) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         // Full-width check if evaluator available
@@ -941,24 +912,20 @@ namespace cobra {
         }
 
         if (!accepted) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         auto vs = VerificationState::kVerified;
         if (ctx.opts.spot_check) {
             auto check = SignatureCheck(sig, **pm, num_vars, ctx.bitwidth);
             if (!check.passed) {
-                return Ok(
-                    PassResult{
-                        .decision    = PassDecision::kNoProgress,
-                        .disposition = ItemDisposition::kRetainCurrent,
-                    }
-                );
+                return Ok(PassResult{
+                    .decision    = PassDecision::kNoProgress,
+                    .disposition = ItemDisposition::kRetainCurrent,
+                });
             }
         }
 
@@ -976,15 +943,12 @@ namespace cobra {
                 .needs_original_space_verification = sub_ctx.needs_original_space_verification,
                 .sig_vector                        = sub_ctx.elimination.reduced_sig,
             },
-            ctx.bitwidth
-        );
+            ctx.bitwidth);
 
-        return Ok(
-            PassResult{
-                .decision    = PassDecision::kAdvance,
-                .disposition = ItemDisposition::kRetainCurrent,
-            }
-        );
+        return Ok(PassResult{
+            .decision    = PassDecision::kAdvance,
+            .disposition = ItemDisposition::kRetainCurrent,
+        });
     }
 
     // ---------------------------------------------------------------
@@ -1002,12 +966,10 @@ namespace cobra {
         const auto num_vars     = static_cast< uint32_t >(sub_ctx.real_vars.size());
 
         if (!IsBooleanValued(sig) || num_vars > ctx.opts.max_vars) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         auto anf      = ComputeAnf(sig, num_vars);
@@ -1017,12 +979,10 @@ namespace cobra {
         if (ctx.opts.spot_check) {
             auto spot = SignatureCheck(sig, *anf_expr, num_vars, ctx.bitwidth);
             if (!spot.passed) {
-                return Ok(
-                    PassResult{
-                        .decision    = PassDecision::kNoProgress,
-                        .disposition = ItemDisposition::kRetainCurrent,
-                    }
-                );
+                return Ok(PassResult{
+                    .decision    = PassDecision::kNoProgress,
+                    .disposition = ItemDisposition::kRetainCurrent,
+                });
             }
         }
 
@@ -1038,18 +998,15 @@ namespace cobra {
                 // {0,1} and full-width semantics, so verify with the
                 // residual-gate probe count rather than the default.
                 auto repaired  = RepairProductShadow(CloneExpr(*anf_expr));
-                auto repair_fw = FullWidthCheckEval(
-                    *mapped_eval, num_vars, *repaired, ctx.bitwidth, kResidualGateProbeCount
-                );
+                auto repair_fw = FullWidthCheckEval(*mapped_eval, num_vars, *repaired,
+                                                    ctx.bitwidth, kResidualGateProbeCount);
                 if (repair_fw.passed) {
                     anf_expr = std::move(repaired);
                 } else {
-                    return Ok(
-                        PassResult{
-                            .decision    = PassDecision::kNoProgress,
-                            .disposition = ItemDisposition::kRetainCurrent,
-                        }
-                    );
+                    return Ok(PassResult{
+                        .decision    = PassDecision::kNoProgress,
+                        .disposition = ItemDisposition::kRetainCurrent,
+                    });
                 }
             }
         }
@@ -1068,15 +1025,12 @@ namespace cobra {
                 .needs_original_space_verification = sub_ctx.needs_original_space_verification,
                 .sig_vector                        = sub_ctx.elimination.reduced_sig,
             },
-            ctx.bitwidth
-        );
+            ctx.bitwidth);
 
-        return Ok(
-            PassResult{
-                .decision    = PassDecision::kAdvance,
-                .disposition = ItemDisposition::kRetainCurrent,
-            }
-        );
+        return Ok(PassResult{
+            .decision    = PassDecision::kAdvance,
+            .disposition = ItemDisposition::kRetainCurrent,
+        });
     }
 
     // ---------------------------------------------------------------
@@ -1170,8 +1124,8 @@ namespace cobra {
     // kSignatureCobCandidate
     // ---------------------------------------------------------------
 
-    Result< PassResult >
-    RunSignatureCobCandidate(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunSignatureCobCandidate(const WorkItem &item,
+                                                  OrchestratorContext &ctx) {
         if (!std::holds_alternative< SignatureCoeffStatePayload >(item.payload)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
         }
@@ -1198,19 +1152,17 @@ namespace cobra {
             if (fw.passed) {
                 vs = VerificationState::kVerified;
             } else {
-                return Ok(
-                    PassResult{
-                        .decision    = PassDecision::kNoProgress,
-                        .disposition = ItemDisposition::kRetainCurrent,
-                        .reason =
-                            ReasonDetail{
-                                         .top = { .code    = { ReasonCategory::kVerifyFailed,
-                                                      ReasonDomain::kSignature },
-                                         .message = "CoB candidate failed full-width "
-                                                    "check" },
-                                         },
-                }
-                );
+                return Ok(PassResult{
+                    .decision    = PassDecision::kNoProgress,
+                    .disposition = ItemDisposition::kRetainCurrent,
+                    .reason =
+                        ReasonDetail{
+                                     .top = { .code    = { ReasonCategory::kVerifyFailed,
+                                                  ReasonDomain::kSignature },
+                                     .message = "CoB candidate failed full-width "
+                                                "check" },
+                                     },
+                });
             }
         }
 
@@ -1228,23 +1180,20 @@ namespace cobra {
                 .needs_original_space_verification = sub_ctx.needs_original_space_verification,
                 .sig_vector                        = sub_ctx.elimination.reduced_sig,
             },
-            ctx.bitwidth
-        );
+            ctx.bitwidth);
 
-        return Ok(
-            PassResult{
-                .decision    = PassDecision::kAdvance,
-                .disposition = ItemDisposition::kRetainCurrent,
-            }
-        );
+        return Ok(PassResult{
+            .decision    = PassDecision::kAdvance,
+            .disposition = ItemDisposition::kRetainCurrent,
+        });
     }
 
     // ---------------------------------------------------------------
     // kSignatureSingletonPolyRecovery
     // ---------------------------------------------------------------
 
-    Result< PassResult >
-    RunSignatureSingletonPolyRecovery(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunSignatureSingletonPolyRecovery(const WorkItem &item,
+                                                           OrchestratorContext &ctx) {
         if (!std::holds_alternative< SignatureCoeffStatePayload >(item.payload)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
         }
@@ -1256,22 +1205,21 @@ namespace cobra {
 
         auto mapped_eval = BuildMappedEvaluator(ctx, sub_ctx, item);
         if (!mapped_eval) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         // Singleton power recovery
         auto singleton_result = RecoverSingletonPowers(*mapped_eval, num_vars, ctx.bitwidth);
 
-        std::vector< uint64_t > singleton_at_2;
+        cobra::BudgetVector< uint64_t > singleton_at_2;
         if (singleton_result.has_value()) {
             const auto &sr = singleton_result.value();
             singleton_at_2.resize(num_vars, 0);
             for (uint32_t i = 0; i < num_vars; ++i) {
+                ::cobra::budget::Checkpoint();
                 singleton_at_2[i] = EvalUnivariateAt2(sr.per_var[i], ctx.bitwidth);
             }
         }
@@ -1280,19 +1228,16 @@ namespace cobra {
         auto split =
             SplitCoefficients(coeffs, *mapped_eval, num_vars, ctx.bitwidth, singleton_at_2);
 
-        const bool has_mul =
-            std::any_of(split.mul_coeffs.begin(), split.mul_coeffs.end(), [](uint64_t c) {
-                return c != 0;
-            });
+        const bool has_mul = std::any_of(split.mul_coeffs.begin(), split.mul_coeffs.end(),
+                                         [](uint64_t c) { return c != 0; });
 
-        std::unique_ptr< Expr > poly_expr = nullptr;
-        std::vector< uint64_t > residual  = split.and_coeffs;
+        std::unique_ptr< Expr > poly_expr        = nullptr;
+        cobra::BudgetVector< uint64_t > residual = split.and_coeffs;
 
         if (has_mul) {
-            auto lowered = LowerArithmeticFragment(
-                split.and_coeffs, split.mul_coeffs, static_cast< uint8_t >(num_vars),
-                ctx.bitwidth
-            );
+            auto lowered =
+                LowerArithmeticFragment(split.and_coeffs, split.mul_coeffs,
+                                        static_cast< uint8_t >(num_vars), ctx.bitwidth);
 
             if (lowered.has_value()) {
                 auto normalized = NormalizePolynomial(lowered.value().poly);
@@ -1331,12 +1276,10 @@ namespace cobra {
 
             auto fw = FullWidthCheckEval(*mapped_eval, num_vars, *prefix, ctx.bitwidth);
             if (!fw.passed) {
-                return Ok(
-                    PassResult{
-                        .decision    = PassDecision::kNoProgress,
-                        .disposition = ItemDisposition::kRetainCurrent,
-                    }
-                );
+                return Ok(PassResult{
+                    .decision    = PassDecision::kNoProgress,
+                    .disposition = ItemDisposition::kRetainCurrent,
+                });
             }
 
             auto cost_info = ComputeCost(*prefix);
@@ -1352,15 +1295,12 @@ namespace cobra {
                         sub_ctx.needs_original_space_verification,
                     .sig_vector = sub_ctx.elimination.reduced_sig,
                 },
-                ctx.bitwidth
-            );
+                ctx.bitwidth);
 
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kAdvance,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kAdvance,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         // When invoked from a residual solver's recursive signature
@@ -1383,16 +1323,13 @@ namespace cobra {
             // this, the override branch would commit a kVerified
             // candidate after only 8 probes against a Mul(coeff, anf)
             // shape that has known full-width false-positive risk.
-            auto fw = FullWidthCheckEval(
-                *mapped_eval, num_vars, *combined, ctx.bitwidth, kResidualGateProbeCount
-            );
+            auto fw = FullWidthCheckEval(*mapped_eval, num_vars, *combined, ctx.bitwidth,
+                                         kResidualGateProbeCount);
             if (!fw.passed) {
-                return Ok(
-                    PassResult{
-                        .decision    = PassDecision::kNoProgress,
-                        .disposition = ItemDisposition::kRetainCurrent,
-                    }
-                );
+                return Ok(PassResult{
+                    .decision    = PassDecision::kNoProgress,
+                    .disposition = ItemDisposition::kRetainCurrent,
+                });
             }
 
             auto cost_info = ComputeCost(*combined);
@@ -1408,15 +1345,12 @@ namespace cobra {
                         sub_ctx.needs_original_space_verification,
                     .sig_vector = sub_ctx.elimination.reduced_sig,
                 },
-                ctx.bitwidth
-            );
+                ctx.bitwidth);
 
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kAdvance,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kAdvance,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         // Nonzero residual: emit kRemainderState for shared solver table.
@@ -1430,9 +1364,8 @@ namespace cobra {
         auto residual_elim    = EliminateAuxVars(residual_sig, sub_ctx.real_vars);
         auto residual_support = BuildVarSupport(sub_ctx.real_vars, residual_elim.real_vars);
 
-        bool is_bn = std::all_of(residual_sig.begin(), residual_sig.end(), [](uint64_t s) {
-            return s == 0;
-        });
+        bool is_bn = std::all_of(residual_sig.begin(), residual_sig.end(),
+                                 [](uint64_t s) { return s == 0; });
 
         WorkItem residual_item;
         residual_item.payload = RemainderStatePayload{
@@ -1472,8 +1405,8 @@ namespace cobra {
     // kSignatureMultivarPolyRecovery
     // ---------------------------------------------------------------
 
-    Result< PassResult >
-    RunSignatureMultivarPolyRecovery(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunSignatureMultivarPolyRecovery(const WorkItem &item,
+                                                          OrchestratorContext &ctx) {
         if (!std::holds_alternative< SignatureStatePayload >(item.payload)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
         }
@@ -1492,25 +1425,21 @@ namespace cobra {
 
         auto mapped_eval = BuildMappedEvaluator(ctx, sub_ctx, item);
         if (!has_multivar_flag || num_vars > 6 || !mapped_eval) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
-        std::vector< uint32_t > support(num_vars);
+        cobra::BudgetVector< uint32_t > support(num_vars);
         std::iota(support.begin(), support.end(), 0U);
         auto recovery = RecoverAndVerifyPoly(*mapped_eval, support, num_vars, ctx.bitwidth);
 
         if (!recovery.Succeeded()) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         auto payload   = recovery.TakePayload();
@@ -1528,23 +1457,20 @@ namespace cobra {
                 .needs_original_space_verification = sub_ctx.needs_original_space_verification,
                 .sig_vector                        = sub_ctx.elimination.reduced_sig,
             },
-            ctx.bitwidth
-        );
+            ctx.bitwidth);
 
-        return Ok(
-            PassResult{
-                .decision    = PassDecision::kAdvance,
-                .disposition = ItemDisposition::kRetainCurrent,
-            }
-        );
+        return Ok(PassResult{
+            .decision    = PassDecision::kAdvance,
+            .disposition = ItemDisposition::kRetainCurrent,
+        });
     }
 
     // ---------------------------------------------------------------
     // kSignatureBitwiseDecompose — fanout pass
     // ---------------------------------------------------------------
 
-    Result< PassResult >
-    RunSignatureBitwiseDecompose(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunSignatureBitwiseDecompose(const WorkItem &item,
+                                                      OrchestratorContext &ctx) {
         if (!std::holds_alternative< SignatureStatePayload >(item.payload)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
         }
@@ -1552,59 +1478,48 @@ namespace cobra {
         // Only at depth 0: child states inherit classification from the parent
         // but may represent different sub-problems. Only with a global
         // evaluator: otherwise kVerified may be signature-level only.
-        if (ShouldSkipDecomposition(
-                item, ctx, /*require_root_depth=*/true, /*require_global_evaluator=*/true
-            ))
+        if (ShouldSkipDecomposition(item, ctx, /*require_root_depth=*/true,
+                                    /*require_global_evaluator=*/true))
         {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         if (item.signature_recursion_depth >= 2) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         const auto &sig_payload = std::get< SignatureStatePayload >(item.payload);
         const auto &sub_ctx     = sig_payload.ctx;
         auto parent_eval        = BuildMappedEvaluator(ctx, sub_ctx, item);
         if (!parent_eval) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         const auto &sig     = sub_ctx.elimination.reduced_sig;
         const auto num_vars = static_cast< uint32_t >(sub_ctx.real_vars.size());
 
         if (sig.size() < 2 || num_vars > 6) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         auto candidates = EnumerateBitwiseCandidates(sig, num_vars);
         if (candidates.empty()) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         constexpr size_t kMaxCandidates = 8;
@@ -1618,8 +1533,10 @@ namespace cobra {
         result.disposition = ItemDisposition::kRetainCurrent;
 
         for (const auto &cand : candidates) {
-            std::vector< uint32_t > g_context_indices;
+            ::cobra::budget::Checkpoint();
+            cobra::BudgetVector< uint32_t > g_context_indices;
             for (uint32_t v = 0; v < num_vars; ++v) {
+                ::cobra::budget::Checkpoint();
                 if (v == cand.var_k) { continue; }
                 g_context_indices.push_back(v);
             }
@@ -1627,8 +1544,9 @@ namespace cobra {
             const auto n_g = static_cast< uint32_t >(g_context_indices.size());
             auto [compacted_sig, active_var_indices] = CompactSignature(cand.g_sig, n_g);
 
-            std::vector< uint32_t > active_context_indices;
+            cobra::BudgetVector< uint32_t > active_context_indices;
             for (const uint32_t ai : active_var_indices) {
+                ::cobra::budget::Checkpoint();
                 active_context_indices.push_back(g_context_indices[ai]);
             }
 
@@ -1642,30 +1560,28 @@ namespace cobra {
                 if (!fw.passed) { continue; }
 
                 auto cost_info = ComputeCost(*composed);
-                SubmitNormalizedCandidate(
-                    ctx.competition_groups, parent_group_id,
-                    CandidateRecord{
-                        .expr         = std::move(composed),
-                        .cost         = cost_info.cost,
-                        .verification = VerificationState::kVerified,
-                        .real_vars    = sub_ctx.real_vars,
-                        .source_pass  = PassId::kSignatureBitwiseDecompose,
-                        .needs_original_space_verification =
-                            sub_ctx.needs_original_space_verification,
-                    },
-                    ctx.bitwidth
-                );
+                SubmitNormalizedCandidate(ctx.competition_groups, parent_group_id,
+                                          CandidateRecord{
+                                              .expr         = std::move(composed),
+                                              .cost         = cost_info.cost,
+                                              .verification = VerificationState::kVerified,
+                                              .real_vars    = sub_ctx.real_vars,
+                                              .source_pass = PassId::kSignatureBitwiseDecompose,
+                                              .needs_original_space_verification =
+                                                  sub_ctx.needs_original_space_verification,
+                                          },
+                                          ctx.bitwidth);
                 continue;
             }
 
             // Build active-variable context for the child
-            std::vector< std::string > active_vars;
-            std::vector< uint32_t > child_original_indices;
+            cobra::BudgetVector< std::string > active_vars;
+            cobra::BudgetVector< uint32_t > child_original_indices;
             for (const uint32_t ai : active_var_indices) {
+                ::cobra::budget::Checkpoint();
                 active_vars.push_back(sub_ctx.real_vars[g_context_indices[ai]]);
                 child_original_indices.push_back(
-                    sub_ctx.original_indices[g_context_indices[ai]]
-                );
+                    sub_ctx.original_indices[g_context_indices[ai]]);
             }
 
             // Acquire a handle on the parent for this child lineage.
@@ -1725,8 +1641,8 @@ namespace cobra {
     // kSignatureHybridDecompose — fanout pass
     // ---------------------------------------------------------------
 
-    Result< PassResult >
-    RunSignatureHybridDecompose(const WorkItem &item, OrchestratorContext &ctx) {
+    Result< PassResult > RunSignatureHybridDecompose(const WorkItem &item,
+                                                     OrchestratorContext &ctx) {
         if (!std::holds_alternative< SignatureStatePayload >(item.payload)) {
             return Ok(PassResult{ .decision = PassDecision::kNotApplicable });
         }
@@ -1734,59 +1650,48 @@ namespace cobra {
         // Hybrid already stops at root level via the recursion-depth guard below.
         // Unlike bitwise decomposition, kVerified here is only produced after a
         // full-width-checked submission path, so no extra evaluator guard is needed.
-        if (ShouldSkipDecomposition(
-                item, ctx, /*require_root_depth=*/false, /*require_global_evaluator=*/false
-            ))
+        if (ShouldSkipDecomposition(item, ctx, /*require_root_depth=*/false,
+                                    /*require_global_evaluator=*/false))
         {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         if (item.signature_recursion_depth >= 1) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         const auto &sig_payload = std::get< SignatureStatePayload >(item.payload);
         const auto &sub_ctx     = sig_payload.ctx;
         auto parent_eval        = BuildMappedEvaluator(ctx, sub_ctx, item);
         if (!parent_eval) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         const auto &sig     = sub_ctx.elimination.reduced_sig;
         const auto num_vars = static_cast< uint32_t >(sub_ctx.real_vars.size());
 
         if (sig.size() < 2 || num_vars > 6) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         auto candidates = EnumerateHybridCandidates(sig, num_vars);
         if (candidates.empty()) {
-            return Ok(
-                PassResult{
-                    .decision    = PassDecision::kNoProgress,
-                    .disposition = ItemDisposition::kRetainCurrent,
-                }
-            );
+            return Ok(PassResult{
+                .decision    = PassDecision::kNoProgress,
+                .disposition = ItemDisposition::kRetainCurrent,
+            });
         }
 
         constexpr size_t kMaxCandidates = 8;
@@ -1800,6 +1705,7 @@ namespace cobra {
         result.disposition = ItemDisposition::kRetainCurrent;
 
         for (const auto &cand : candidates) {
+            ::cobra::budget::Checkpoint();
             // Acquire a handle on the parent for this child lineage.
             AcquireHandle(ctx.competition_groups, parent_group_id);
 

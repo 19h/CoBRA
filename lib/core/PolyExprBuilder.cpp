@@ -1,5 +1,6 @@
 #include "cobra/core/PolyExprBuilder.h"
 #include "cobra/core/BasisTransform.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/ExprUtils.h"
 #include "cobra/core/MonomialKey.h"
@@ -20,18 +21,20 @@ namespace {
     // Build balanced multiplication tree for x^exponent
     std::unique_ptr< cobra::Expr > BuildPowerExpr(uint32_t var_index, uint8_t exponent) {
         assert(exponent >= 2);
-        std::vector< std::unique_ptr< cobra::Expr > > factors;
+        cobra::BudgetVector< std::unique_ptr< cobra::Expr > > factors;
         for (uint8_t i = 0; i < exponent; ++i) {
+            ::cobra::budget::Checkpoint();
             factors.push_back(cobra::Expr::Variable(var_index));
         }
         // Pairwise reduction
         while (factors.size() > 1) {
-            std::vector< std::unique_ptr< cobra::Expr > > next;
+            ::cobra::budget::Checkpoint();
+            cobra::BudgetVector< std::unique_ptr< cobra::Expr > > next;
             for (size_t i = 0; i < factors.size(); i += 2) {
+                ::cobra::budget::Checkpoint();
                 if (i + 1 < factors.size()) {
                     next.push_back(
-                        cobra::Expr::Mul(std::move(factors[i]), std::move(factors[i + 1]))
-                    );
+                        cobra::Expr::Mul(std::move(factors[i]), std::move(factors[i + 1])));
                 } else {
                     next.push_back(std::move(factors[i]));
                 }
@@ -51,8 +54,7 @@ namespace cobra {
             return Err< std::unique_ptr< Expr > >(
                 CobraError::kTooManyVariables,
                 "build_poly_expr: num_vars (" + std::to_string(n) + ") exceeds kMaxPolyVars ("
-                    + std::to_string(kMaxPolyVars) + ")"
-            );
+                    + std::to_string(kMaxPolyVars) + ")");
         }
         const uint32_t w = poly.bitwidth;
 
@@ -62,19 +64,21 @@ namespace cobra {
         CoeffMap current = ToMonomialBasis(poly.coeffs, n, w);
 
         // Step 2: Sort terms for deterministic output
-        std::vector< std::pair< MonomialKey, Coeff > > sorted(current.begin(), current.end());
-        std::sort(sorted.begin(), sorted.end(), [](const auto &a, const auto &b) {
-            return a.first < b.first;
-        });
+        cobra::BudgetVector< std::pair< MonomialKey, Coeff > > sorted(current.begin(),
+                                                                      current.end());
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const auto &a, const auto &b) { return a.first < b.first; });
 
         // Step 3: Build Expr for each monomial term
-        std::vector< std::unique_ptr< Expr > > term_exprs;
+        cobra::BudgetVector< std::unique_ptr< Expr > > term_exprs;
         for (const auto &[tuple, coeff] : sorted) {
+            ::cobra::budget::Checkpoint();
             uint8_t exps[kMaxPolyVars];
             tuple.ToExponents(exps, n);
 
             std::unique_ptr< Expr > product;
             for (uint8_t i = 0; i < n; ++i) {
+                ::cobra::budget::Checkpoint();
                 if (exps[i] == 0) { continue; }
                 std::unique_ptr< Expr > factor;
                 if (exps[i] == 1) {
@@ -99,12 +103,13 @@ namespace cobra {
 
         // Step 4: Build balanced add tree via pairwise reduction
         while (term_exprs.size() > 1) {
-            std::vector< std::unique_ptr< Expr > > next;
+            ::cobra::budget::Checkpoint();
+            cobra::BudgetVector< std::unique_ptr< Expr > > next;
             for (size_t i = 0; i < term_exprs.size(); i += 2) {
+                ::cobra::budget::Checkpoint();
                 if (i + 1 < term_exprs.size()) {
                     next.push_back(
-                        Expr::Add(std::move(term_exprs[i]), std::move(term_exprs[i + 1]))
-                    );
+                        Expr::Add(std::move(term_exprs[i]), std::move(term_exprs[i + 1])));
                 } else {
                     next.push_back(std::move(term_exprs[i]));
                 }

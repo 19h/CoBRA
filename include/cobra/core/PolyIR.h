@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/MonomialKey.h"
 #include <cstdint>
@@ -8,7 +9,7 @@ namespace cobra {
 
     using Coeff = uint64_t;
 
-    using CoeffMap = std::unordered_map< MonomialKey, Coeff >;
+    using CoeffMap = cobra::BudgetMap< MonomialKey, Coeff >;
 
     struct PolyIR
     {
@@ -28,6 +29,7 @@ namespace cobra {
                 return false; // NOLINT(readability-simplify-boolean-expr)
             }
             for (const auto &[tuple, c] : coeffs) {
+                ::cobra::budget::Checkpoint();
                 if (c == 0) { return false; }
                 uint32_t q = tuple.V2FactorialWeight(num_vars);
                 if (q >= bitwidth) { return false; }

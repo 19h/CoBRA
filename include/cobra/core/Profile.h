@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 // Thin wrapper over Tracy profiler macros.
 // When COBRA_ENABLE_TRACY is defined, these expand to Tracy zones/plots.
@@ -27,12 +28,12 @@
 
 #else
 
-    #define COBRA_ZONE()          ((void) 0)
-    #define COBRA_ZONE_N(name)    ((void) 0)
-    #define COBRA_ZONE_TEXT(str)  ((void) 0)
-    #define COBRA_ZONE_VALUE(val) ((void) 0)
-    #define COBRA_FRAME()         ((void) 0)
-    #define COBRA_PLOT(name, val) ((void) 0)
-    #define COBRA_MSG(literal)    ((void) 0)
+    #define COBRA_ZONE()          ::cobra::budget::Checkpoint()
+    #define COBRA_ZONE_N(name)    ::cobra::budget::Checkpoint()
+    #define COBRA_ZONE_TEXT(str)  ::cobra::budget::Checkpoint()
+    #define COBRA_ZONE_VALUE(val) ::cobra::budget::Checkpoint()
+    #define COBRA_FRAME()         ::cobra::budget::Checkpoint()
+    #define COBRA_PLOT(name, val) ::cobra::budget::Checkpoint()
+    #define COBRA_MSG(literal)    ::cobra::budget::Checkpoint()
 
 #endif

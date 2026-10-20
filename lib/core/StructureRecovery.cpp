@@ -1,5 +1,6 @@
 #include "cobra/core/StructureRecovery.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/ExprUtils.h"
 #include "cobra/core/SemilinearIR.h"
@@ -28,6 +29,7 @@ namespace cobra {
         /// Find or create a bare-variable atom for the given variable index.
         AtomId FindOrCreateBareAtom(SemilinearIR &ir, const Expr &basis) {
             for (size_t k = 0; k < ir.atom_table.size(); ++k) {
+                ::cobra::budget::Checkpoint();
                 const auto &info = ir.atom_table[k];
                 if (info.original_subtree->kind == basis.kind) {
                     if (basis.kind == Expr::Kind::kVariable
@@ -47,11 +49,11 @@ namespace cobra {
         /// or a bare `Var(var_idx)` when mask == kMod. Prevents
         /// FlattenComplexAtoms from emitting duplicate canonical atoms
         /// when multiple complex atoms flatten to the same shape.
-        AtomId FindOrCreateMaskedVariableAtom(
-            SemilinearIR &ir, GlobalVarIdx var_idx, uint64_t mask, uint64_t mod_mask
-        ) {
+        AtomId FindOrCreateMaskedVariableAtom(SemilinearIR &ir, GlobalVarIdx var_idx,
+                                              uint64_t mask, uint64_t mod_mask) {
             const bool kBare = (mask == mod_mask);
             for (size_t k = 0; k < ir.atom_table.size(); ++k) {
+                ::cobra::budget::Checkpoint();
                 const auto &subtree = *ir.atom_table[k].original_subtree;
                 if (kBare) {
                     if (subtree.kind == Expr::Kind::kVariable && subtree.var_index == var_idx) {
@@ -81,39 +83,42 @@ namespace cobra {
         }
 
         /// Rebuild ir.terms from basis groups + non-group terms.
-        void RebuildTerms(
-            SemilinearIR &ir,
-            const std::unordered_map< uint64_t, std::vector< RecoveryTerm > > &basis_groups,
-            const std::vector< bool > &in_group
-        ) {
+        void
+        RebuildTerms(SemilinearIR &ir,
+                     const cobra::BudgetMap< uint64_t, cobra::BudgetVector< RecoveryTerm > >
+                         &basis_groups,
+                     const cobra::BudgetVector< bool > &in_group) {
             const uint64_t kMod = Bitmask(ir.bitwidth);
-            std::vector< WeightedAtom > new_terms;
+            cobra::BudgetVector< WeightedAtom > new_terms;
 
             for (size_t i = 0; i < ir.terms.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (!in_group[i]) { new_terms.push_back(ir.terms[i]); }
             }
             for (const auto &[hash, entries] : basis_groups) {
+                ::cobra::budget::Checkpoint();
                 for (const auto &e : entries) {
+                    ::cobra::budget::Checkpoint();
                     if (e.consumed || e.coeff == 0) { continue; }
                     new_terms.push_back({ .coeff = e.coeff & kMod, .atom_id = e.atom_id });
                 }
             }
 
-            std::unordered_map< AtomId, uint64_t > merged;
+            cobra::BudgetMap< AtomId, uint64_t > merged;
             for (const auto &t : new_terms) {
+                ::cobra::budget::Checkpoint();
                 merged[t.atom_id] = (merged[t.atom_id] + t.coeff) & kMod;
             }
 
             ir.terms.clear();
             for (const auto &[aid, coeff] : merged) {
+                ::cobra::budget::Checkpoint();
                 if (coeff != 0) { ir.terms.push_back({ .coeff = coeff, .atom_id = aid }); }
             }
-            std::sort(
-                ir.terms.begin(), ir.terms.end(),
-                [](const WeightedAtom &a, const WeightedAtom &b) {
-                    return a.atom_id < b.atom_id;
-                }
-            );
+            std::sort(ir.terms.begin(), ir.terms.end(),
+                      [](const WeightedAtom &a, const WeightedAtom &b) {
+                          return a.atom_id < b.atom_id;
+                      });
         }
 
     } // namespace
@@ -125,11 +130,12 @@ namespace cobra {
         const uint64_t kMod = Bitmask(ir.bitwidth);
 
         // Decompose and group by basis.
-        std::unordered_map< uint64_t, std::vector< RecoveryTerm > > basis_groups;
-        std::unordered_map< uint64_t, const Expr * > basis_repr;
-        std::vector< bool > in_group(ir.terms.size(), false);
+        cobra::BudgetMap< uint64_t, cobra::BudgetVector< RecoveryTerm > > basis_groups;
+        cobra::BudgetMap< uint64_t, const Expr * > basis_repr;
+        cobra::BudgetVector< bool > in_group(ir.terms.size(), false);
 
         for (size_t i = 0; i < ir.terms.size(); ++i) {
+            ::cobra::budget::Checkpoint();
             const auto &term = ir.terms[i];
             auto decomp      = DecomposeAtom(ir.atom_table[term.atom_id], kMod);
             if (!decomp.valid) { continue; }
@@ -137,19 +143,21 @@ namespace cobra {
             in_group[i] = true;
             basis_repr.emplace(decomp.basis_hash, decomp.basis);
             basis_groups[decomp.basis_hash].push_back(
-                { .coeff = term.coeff, .mask = decomp.mask, .atom_id = term.atom_id }
-            );
+                { .coeff = term.coeff, .mask = decomp.mask, .atom_id = term.atom_id });
         }
 
         bool any_changed = false;
 
         for (auto &[hash, entries] : basis_groups) {
+            ::cobra::budget::Checkpoint();
             if (entries.size() < 2) { continue; }
             const Expr *basis = basis_repr.at(hash);
 
             for (size_t i = 0; i < entries.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (entries[i].consumed) { continue; }
                 for (size_t j = i + 1; j < entries.size(); ++j) {
+                    ::cobra::budget::Checkpoint();
                     if (entries[j].consumed) { continue; }
 
                     auto &a = entries[i];
@@ -168,8 +176,7 @@ namespace cobra {
                     if (((a.coeff + b.coeff) & kMod) == 0) {
                         // std::popcount, not __builtin_popcountll: the latter
                         // is a GCC/Clang extension with no MSVC equivalent.
-                        auto &src =
-                            (std::popcount(a.mask) <= std::popcount(b.mask)) ? a : b;
+                        auto &src = (std::popcount(a.mask) <= std::popcount(b.mask)) ? a : b;
                         auto &dst = (&src == &a) ? b : a;
 
                         const uint64_t kM = src.coeff;
@@ -186,9 +193,8 @@ namespace cobra {
 
                         ir.constant = (ir.constant + (kM * kC)) & kMod;
                         any_changed = true;
-                        COBRA_TRACE(
-                            "StructRecovery", "XOR recovery: mask={:#x} coeff={}", kC, dst.coeff
-                        );
+                        COBRA_TRACE("StructRecovery", "XOR recovery: mask={:#x} coeff={}", kC,
+                                    dst.coeff);
                         break;
                     }
 
@@ -200,11 +206,9 @@ namespace cobra {
                         b.atom_id   = bare;
                         b.mask      = kMod;
                         any_changed = true;
-                        COBRA_TRACE(
-                            "StructRecovery",
-                            "Mask elimination: mask={:#x} diff_coeff={} bare_coeff={}", a.mask,
-                            kDiff, b.coeff
-                        );
+                        COBRA_TRACE("StructRecovery",
+                                    "Mask elimination: mask={:#x} diff_coeff={} bare_coeff={}",
+                                    a.mask, kDiff, b.coeff);
                         break;
                     }
                 }
@@ -234,11 +238,12 @@ namespace cobra {
             AtomId atom_id;
         };
 
-        std::unordered_map< uint64_t, std::vector< GroupTerm > > basis_groups;
-        std::unordered_map< uint64_t, const Expr * > basis_repr;
-        std::vector< bool > in_group(ir.terms.size(), false);
+        cobra::BudgetMap< uint64_t, cobra::BudgetVector< GroupTerm > > basis_groups;
+        cobra::BudgetMap< uint64_t, const Expr * > basis_repr;
+        cobra::BudgetVector< bool > in_group(ir.terms.size(), false);
 
         for (size_t i = 0; i < ir.terms.size(); ++i) {
+            ::cobra::budget::Checkpoint();
             const auto &term = ir.terms[i];
             auto decomp      = DecomposeAtom(ir.atom_table[term.atom_id], kMod);
             if (!decomp.valid) { continue; }
@@ -247,45 +252,51 @@ namespace cobra {
             in_group[i] = true;
             basis_repr.emplace(decomp.basis_hash, decomp.basis);
             basis_groups[decomp.basis_hash].push_back(
-                { .coeff = term.coeff, .mask = decomp.mask, .atom_id = term.atom_id }
-            );
+                { .coeff = term.coeff, .mask = decomp.mask, .atom_id = term.atom_id });
         }
 
         bool any_changed = false;
 
         for (auto &[hash, entries] : basis_groups) {
+            ::cobra::budget::Checkpoint();
             if (entries.size() < 2) { continue; }
             const Expr *basis = basis_repr.at(hash);
 
             // Compute per-bit effective coefficient:
             // eff[i] = sum(c_k * ((m_k >> i) & 1)) mod 2^bw
-            std::vector< uint64_t > eff(ir.bitwidth, 0);
+            cobra::BudgetVector< uint64_t > eff(ir.bitwidth, 0);
             for (uint32_t bit = 0; bit < ir.bitwidth; ++bit) {
+                ::cobra::budget::Checkpoint();
                 for (const auto &t : entries) {
+                    ::cobra::budget::Checkpoint();
                     if (((t.mask >> bit) & 1) != 0) { eff[bit] = (eff[bit] + t.coeff) & kMod; }
                 }
             }
 
             // Group bits by effective coefficient → partitions.
-            std::unordered_map< uint64_t, uint64_t > coeff_to_mask;
+            cobra::BudgetMap< uint64_t, uint64_t > coeff_to_mask;
             for (uint32_t bit = 0; bit < ir.bitwidth; ++bit) {
+                ::cobra::budget::Checkpoint();
                 if (eff[bit] != 0) { coeff_to_mask[eff[bit]] |= (1ULL << bit); }
             }
 
             // If the new partition count >= current term count, no improvement.
             if (coeff_to_mask.size() >= entries.size()) { continue; }
 
-            COBRA_TRACE(
-                "StructRecovery", "CoalesceTerms: group var={} old_terms={} new_terms={}",
-                basis->var_index, entries.size(), coeff_to_mask.size()
-            );
+            COBRA_TRACE("StructRecovery",
+                        "CoalesceTerms: group var={} old_terms={} new_terms={}",
+                        basis->var_index, entries.size(), coeff_to_mask.size());
 
             // Replace group with new terms.
             // Mark old entries as needing removal.
-            for (auto &e : entries) { e.atom_id = UINT32_MAX; }
+            for (auto &e : entries) {
+                ::cobra::budget::Checkpoint();
+                e.atom_id = UINT32_MAX;
+            }
 
             // Create new terms for each partition.
             for (const auto &[coeff, mask] : coeff_to_mask) {
+                ::cobra::budget::Checkpoint();
                 AtomId aid{};
                 if (mask == kMod) {
                     aid = FindOrCreateBareAtom(ir, *basis);
@@ -305,31 +316,35 @@ namespace cobra {
         }
 
         // Rebuild terms: skip entries with atom_id == UINT32_MAX (marked for removal).
-        std::vector< WeightedAtom > new_terms;
+        cobra::BudgetVector< WeightedAtom > new_terms;
         for (size_t i = 0; i < ir.terms.size(); ++i) {
+            ::cobra::budget::Checkpoint();
             if (!in_group[i]) { new_terms.push_back(ir.terms[i]); }
         }
         for (const auto &[hash, entries] : basis_groups) {
+            ::cobra::budget::Checkpoint();
             for (const auto &e : entries) {
+                ::cobra::budget::Checkpoint();
                 if (e.atom_id == UINT32_MAX || e.coeff == 0) { continue; }
                 new_terms.push_back({ .coeff = e.coeff & kMod, .atom_id = e.atom_id });
             }
         }
 
         // Merge duplicate atom_ids.
-        std::unordered_map< AtomId, uint64_t > merged;
+        cobra::BudgetMap< AtomId, uint64_t > merged;
         for (const auto &t : new_terms) {
+            ::cobra::budget::Checkpoint();
             merged[t.atom_id] = (merged[t.atom_id] + t.coeff) & kMod;
         }
 
         ir.terms.clear();
         for (const auto &[aid, coeff] : merged) {
+            ::cobra::budget::Checkpoint();
             if (coeff != 0) { ir.terms.push_back({ .coeff = coeff, .atom_id = aid }); }
         }
         std::sort(
             ir.terms.begin(), ir.terms.end(),
-            [](const WeightedAtom &a, const WeightedAtom &b) { return a.atom_id < b.atom_id; }
-        );
+            [](const WeightedAtom &a, const WeightedAtom &b) { return a.atom_id < b.atom_id; });
 
         COBRA_TRACE("StructRecovery", "CoalesceTerms: refined to {} terms", ir.terms.size());
     }
@@ -339,11 +354,12 @@ namespace cobra {
 
         const uint64_t kMod = Bitmask(ir.bitwidth);
 
-        std::vector< WeightedAtom > new_terms;
+        cobra::BudgetVector< WeightedAtom > new_terms;
         uint64_t added_constant = 0;
         bool any_flattened      = false;
 
         for (const auto &term : ir.terms) {
+            ::cobra::budget::Checkpoint();
             const auto &info = ir.atom_table[term.atom_id];
 
             // Skip bare variables — already canonical.
@@ -374,7 +390,7 @@ namespace cobra {
             const auto kVecSize = static_cast< size_t >(kVarIdx) + 1;
 
             // Evaluate atom at x=0 and x=UINT64_MAX.
-            std::vector< uint64_t > vals(kVecSize, 0);
+            cobra::BudgetVector< uint64_t > vals(kVecSize, 0);
             const uint64_t kZeroVal =
                 EvalExpr(*info.original_subtree, vals, ir.bitwidth) & kMod;
             vals[kVarIdx] = kMod;
@@ -411,23 +427,23 @@ namespace cobra {
         ir.constant = (ir.constant + added_constant) & kMod;
 
         // Merge duplicate atom_ids.
-        std::unordered_map< AtomId, uint64_t > merged;
+        cobra::BudgetMap< AtomId, uint64_t > merged;
         for (const auto &t : new_terms) {
+            ::cobra::budget::Checkpoint();
             merged[t.atom_id] = (merged[t.atom_id] + t.coeff) & kMod;
         }
 
         ir.terms.clear();
         for (const auto &[aid, coeff] : merged) {
+            ::cobra::budget::Checkpoint();
             if (coeff != 0) { ir.terms.push_back({ .coeff = coeff, .atom_id = aid }); }
         }
         std::sort(
             ir.terms.begin(), ir.terms.end(),
-            [](const WeightedAtom &a, const WeightedAtom &b) { return a.atom_id < b.atom_id; }
-        );
+            [](const WeightedAtom &a, const WeightedAtom &b) { return a.atom_id < b.atom_id; });
 
-        COBRA_TRACE(
-            "StructRecovery", "FlattenComplexAtoms: flattened to {} terms", ir.terms.size()
-        );
+        COBRA_TRACE("StructRecovery", "FlattenComplexAtoms: flattened to {} terms",
+                    ir.terms.size());
         return true;
     }
 

@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 #include <cstdint>
@@ -23,6 +24,6 @@ namespace cobra {
         GhostBuilder build;
     };
 
-    const std::vector< GhostPrimitive > &GetGhostBasis();
+    const cobra::BudgetVector< GhostPrimitive > &GetGhostBasis();
 
 } // namespace cobra

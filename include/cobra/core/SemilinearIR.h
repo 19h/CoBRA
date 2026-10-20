@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 #include <cstdint>
@@ -11,8 +12,8 @@ namespace cobra {
 
     struct AtomKey
     {
-        std::vector< GlobalVarIdx > support; // ascending global order
-        std::vector< uint64_t > truth_table; // exact truth table over support
+        cobra::BudgetVector< GlobalVarIdx > support; // ascending global order
+        cobra::BudgetVector< uint64_t > truth_table; // exact truth table over support
 
         bool operator==(const AtomKey &other) const {
             return support == other.support && truth_table == other.truth_table;
@@ -41,8 +42,8 @@ namespace cobra {
     struct SemilinearIR
     {
         uint64_t constant = 0;
-        std::vector< WeightedAtom > terms;
-        std::vector< AtomInfo > atom_table;
+        cobra::BudgetVector< WeightedAtom > terms;
+        cobra::BudgetVector< AtomInfo > atom_table;
         uint32_t bitwidth = 64;
     };
 
@@ -51,15 +52,15 @@ namespace cobra {
     struct PartitionClass
     {
         uint64_t mask;
-        std::vector< AtomSemanticId > profile;
+        cobra::BudgetVector< AtomSemanticId > profile;
     };
 
     /// Evaluate a pure-bitwise Expr at all 2^k Boolean assignments
     /// to the given support variables. Returns truth table of length 2^k.
     /// All entries are masked to Bitmask(bitwidth).
-    std::vector< uint64_t > ComputeAtomTruthTable(
-        const Expr &atom, const std::vector< GlobalVarIdx > &support, uint32_t bitwidth
-    );
+    cobra::BudgetVector< uint64_t >
+    ComputeAtomTruthTable(const Expr &atom, const cobra::BudgetVector< GlobalVarIdx > &support,
+                          uint32_t bitwidth);
 
     /// Structural hash for Expr trees (stable basis grouping).
     uint64_t StructuralHash(const Expr &expr);
@@ -78,8 +79,8 @@ namespace cobra {
     Decomposed DecomposeAtom(const AtomInfo &info, uint64_t modmask);
 
     /// Create a new atom entry in the IR and return its ID.
-    AtomId
-    CreateAtom(SemilinearIR &ir, std::unique_ptr< Expr > subtree, OperatorFamily provenance);
+    AtomId CreateAtom(SemilinearIR &ir, std::unique_ptr< Expr > subtree,
+                      OperatorFamily provenance);
 
     /// Remove unreferenced atoms from the atom table and remap term IDs.
     /// Call after rewrite passes and before ComputePartitions to avoid

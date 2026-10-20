@@ -1,5 +1,6 @@
 #include "cobra/core/MultivarPolyRecovery.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/MathUtils.h"
 #include "cobra/core/MonomialKey.h"
 #include "cobra/core/PassContract.h"
@@ -33,10 +34,10 @@ namespace cobra {
         // max_degree+1, little-endian over support_vars) into factorial-basis
         // coefficients via tensor-product forward differences. The grid is
         // consumed in place. Validation is the caller's responsibility.
-        SolverResult< NormalizedPoly > RecoverFromGrid(
-            std::vector< uint64_t > table, const std::vector< uint32_t > &support_vars,
-            uint32_t total_num_vars, uint32_t bitwidth, uint8_t max_degree
-        ) {
+        SolverResult< NormalizedPoly >
+        RecoverFromGrid(cobra::BudgetVector< uint64_t > table,
+                        const cobra::BudgetVector< uint32_t > &support_vars,
+                        uint32_t total_num_vars, uint32_t bitwidth, uint8_t max_degree) {
             const auto kK           = static_cast< uint32_t >(support_vars.size());
             const uint64_t kMask    = Bitmask(bitwidth);
             const auto kBase        = static_cast< size_t >(max_degree) + 1;
@@ -44,11 +45,17 @@ namespace cobra {
 
             // Tensor-product forward differences: max_degree passes per dimension
             for (uint32_t dim = 0; dim < kK; ++dim) {
+                ::cobra::budget::Checkpoint();
                 size_t stride = 1;
-                for (uint32_t i = 0; i < dim; ++i) { stride *= kBase; }
+                for (uint32_t i = 0; i < dim; ++i) {
+                    ::cobra::budget::Checkpoint();
+                    stride = budget::CheckedProduct(stride, kBase);
+                }
 
                 for (uint32_t pass = 1; pass <= max_degree; ++pass) {
+                    ::cobra::budget::Checkpoint();
                     for (size_t idx = table_size; idx-- > 0;) {
+                        ::cobra::budget::Checkpoint();
                         const auto kCoord = static_cast< uint32_t >((idx / stride) % kBase);
                         if (kCoord < pass) { continue; }
                         table[idx] = (table[idx] - table[idx - stride]) & kMask;
@@ -68,14 +75,19 @@ namespace cobra {
             // OddPartFactorial(e, bw) == odd_fact[e] & Bitmask(bw), so the
             // per-monomial product below uses the table directly under the
             // existing kPrecMask instead of recomputing the odd-part product.
-            std::vector< uint64_t > odd_fact(static_cast< size_t >(max_degree) + 1, 1);
+            cobra::BudgetVector< uint64_t > odd_fact(static_cast< size_t >(max_degree) + 1, 1);
             for (uint32_t e = 2; e <= max_degree; ++e) {
+                ::cobra::budget::Checkpoint();
                 uint32_t odd = e;
-                while ((odd & 1) == 0) { odd >>= 1; }
+                while ((odd & 1) == 0) {
+                    ::cobra::budget::Checkpoint();
+                    odd >>= 1;
+                }
                 odd_fact[e] = odd_fact[e - 1] * odd;
             }
 
             for (size_t idx = 0; idx < table_size; ++idx) {
+                ::cobra::budget::Checkpoint();
                 const uint64_t kAlpha = table[idx];
                 if (kAlpha == 0) { continue; }
 
@@ -84,6 +96,7 @@ namespace cobra {
                 size_t tmp = idx;
                 uint32_t q = 0;
                 for (uint32_t i = 0; i < kK; ++i) {
+                    ::cobra::budget::Checkpoint();
                     const auto kE          = static_cast< uint8_t >(tmp % kBase);
                     exps[support_vars[i]]  = kE;
                     q                     += TwosInFactorial(kE);
@@ -118,6 +131,7 @@ namespace cobra {
                 const uint64_t kPrecMask =
                     (kPrecBits >= 64) ? UINT64_MAX : ((1ULL << kPrecBits) - 1);
                 for (uint32_t i = 0; i < kK; ++i) {
+                    ::cobra::budget::Checkpoint();
                     uint8_t e = exps[support_vars[i]];
                     if (e >= 2) { odd_product = (odd_product * odd_fact[e]) & kPrecMask; }
                 }
@@ -139,10 +153,10 @@ namespace cobra {
 
     } // namespace
 
-    SolverResult< NormalizedPoly > RecoverMultivarPoly(
-        const Evaluator &eval, const std::vector< uint32_t > &support_vars,
-        uint32_t total_num_vars, uint32_t bitwidth, uint8_t max_degree
-    ) {
+    SolverResult< NormalizedPoly >
+    RecoverMultivarPoly(const Evaluator &eval,
+                        const cobra::BudgetVector< uint32_t > &support_vars,
+                        uint32_t total_num_vars, uint32_t bitwidth, uint8_t max_degree) {
         if (support_vars.empty()) {
             ReasonDetail reason{
                 .top = { .code    = { ReasonCategory::kGuardFailed, ReasonDomain::kMultivarPoly,
@@ -176,6 +190,7 @@ namespace cobra {
             return SolverResult< NormalizedPoly >::Inapplicable(std::move(reason));
         }
         for (auto idx : support_vars) {
+            ::cobra::budget::Checkpoint();
             if (idx >= total_num_vars) {
                 ReasonDetail reason{
                     .top = { .code    = { ReasonCategory::kGuardFailed,
@@ -193,31 +208,39 @@ namespace cobra {
 
         // Compute table size = kBase^kK
         size_t table_size = 1;
-        for (uint32_t i = 0; i < kK; ++i) { table_size *= kBase; }
+        for (uint32_t i = 0; i < kK; ++i) {
+            ::cobra::budget::Checkpoint();
+            table_size = budget::CheckedProduct(table_size, kBase);
+        }
 
         // Evaluate on {0..max_degree}^kK grid (little-endian mixed-radix)
-        std::vector< uint64_t > table(table_size);
-        std::vector< uint64_t > point(total_num_vars, 0);
+        cobra::BudgetVector< uint64_t > table(table_size);
+        cobra::BudgetVector< uint64_t > point(total_num_vars, 0);
 
         for (size_t idx = 0; idx < table_size; ++idx) {
+            ::cobra::budget::Checkpoint();
             size_t tmp = idx;
             for (uint32_t i = 0; i < kK; ++i) {
+                ::cobra::budget::Checkpoint();
                 point[support_vars[i]]  = tmp % kBase;
                 tmp                    /= kBase;
             }
             table[idx] = eval(point) & kMask;
         }
-        for (uint32_t i = 0; i < kK; ++i) { point[support_vars[i]] = 0; }
+        for (uint32_t i = 0; i < kK; ++i) {
+            ::cobra::budget::Checkpoint();
+            point[support_vars[i]] = 0;
+        }
 
-        return RecoverFromGrid(
-            std::move(table), support_vars, total_num_vars, bitwidth, max_degree
-        );
+        return RecoverFromGrid(std::move(table), support_vars, total_num_vars, bitwidth,
+                               max_degree);
     }
 
-    SolverResult< PolyRecoveryResult > RecoverAndVerifyPoly(
-        const Evaluator &eval, const std::vector< uint32_t > &support_vars,
-        uint32_t total_num_vars, uint32_t bitwidth, uint8_t max_degree_cap, uint8_t min_degree
-    ) {
+    SolverResult< PolyRecoveryResult >
+    RecoverAndVerifyPoly(const Evaluator &eval,
+                         const cobra::BudgetVector< uint32_t > &support_vars,
+                         uint32_t total_num_vars, uint32_t bitwidth, uint8_t max_degree_cap,
+                         uint8_t min_degree) {
         COBRA_ZONE_N("RecoverAndVerifyPoly");
         if (max_degree_cap < min_degree) {
             ReasonDetail reason{
@@ -236,6 +259,7 @@ namespace cobra {
             && bitwidth >= 2 && bitwidth <= 64;
         if (inputs_ok) {
             for (auto idx : support_vars) {
+                ::cobra::budget::Checkpoint();
                 if (idx >= total_num_vars) {
                     inputs_ok = false;
                     break;
@@ -252,47 +276,58 @@ namespace cobra {
             // degrees: a higher degree extends the grid by its new shell rather
             // than re-evaluating from scratch (evaluator calls dominate the
             // per-degree cost). Reuse is exact because the evaluator is pure.
-            std::vector< uint64_t > grid;
+            cobra::BudgetVector< uint64_t > grid;
             uint32_t grid_base = 0; // 0 = empty; otherwise current degree + 1
-            std::vector< uint64_t > point(total_num_vars, 0);
+            cobra::BudgetVector< uint64_t > point(total_num_vars, 0);
 
             auto eval_at = [&](size_t idx, uint32_t base) -> uint64_t {
                 size_t tmp = idx;
                 for (uint32_t i = 0; i < kK; ++i) {
+                    ::cobra::budget::Checkpoint();
                     point[support_vars[i]]  = tmp % base;
                     tmp                    /= base;
                 }
                 const uint64_t v = eval(point) & kMask;
-                for (uint32_t i = 0; i < kK; ++i) { point[support_vars[i]] = 0; }
+                for (uint32_t i = 0; i < kK; ++i) {
+                    ::cobra::budget::Checkpoint();
+                    point[support_vars[i]] = 0;
+                }
                 return v;
             };
 
             for (uint8_t d = min_degree; d <= max_degree_cap; ++d) {
+                ::cobra::budget::Checkpoint();
                 if (d < 1) { continue; } // RecoverMultivarPoly rejects max_degree < 1
 
                 const uint32_t kBase = static_cast< uint32_t >(d) + 1;
                 size_t table_size    = 1;
-                for (uint32_t i = 0; i < kK; ++i) { table_size *= kBase; }
+                for (uint32_t i = 0; i < kK; ++i) {
+                    ::cobra::budget::Checkpoint();
+                    table_size = budget::CheckedProduct(table_size, kBase);
+                }
 
                 // Extend the grid to base kBase, evaluating only the new points.
                 if (grid_base == 0) {
                     grid.assign(table_size, 0);
                     for (size_t idx = 0; idx < table_size; ++idx) {
+                        ::cobra::budget::Checkpoint();
                         grid[idx] = eval_at(idx, kBase);
                     }
                 } else {
-                    std::vector< uint64_t > grown(table_size, 0);
+                    cobra::BudgetVector< uint64_t > grown(table_size, 0);
                     for (size_t idx = 0; idx < table_size; ++idx) {
+                        ::cobra::budget::Checkpoint();
                         size_t tmp     = idx;
                         size_t old_idx = 0;
                         size_t place   = 1;
                         bool is_old    = true;
                         for (uint32_t i = 0; i < kK; ++i) {
+                            ::cobra::budget::Checkpoint();
                             const size_t kCoord  = tmp % kBase;
                             tmp                 /= kBase;
                             if (kCoord >= grid_base) { is_old = false; }
                             old_idx += kCoord * place;
-                            place   *= grid_base;
+                            place    = budget::CheckedProduct(place, grid_base);
                         }
                         grown[idx] = is_old ? grid[old_idx] : eval_at(idx, kBase);
                     }
@@ -311,8 +346,7 @@ namespace cobra {
                 if (!check.passed) { continue; }
 
                 return SolverResult< PolyRecoveryResult >::Success(
-                    PolyRecoveryResult{ std::move(expr.value()), d }
-                );
+                    PolyRecoveryResult{ std::move(expr.value()), d });
             }
         }
         ReasonDetail reason{

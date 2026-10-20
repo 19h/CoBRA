@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "CompetitionGroup.h"
 #include "JoinState.h"
@@ -68,9 +69,9 @@ namespace cobra {
 
     struct AstSolveContext
     {
-        std::vector< std::string > vars;
+        cobra::BudgetVector< std::string > vars;
         std::optional< Evaluator > evaluator;
-        std::vector< uint64_t > input_sig;
+        cobra::BudgetVector< uint64_t > input_sig;
     };
 
     struct AstPayload
@@ -83,28 +84,26 @@ namespace cobra {
 
     struct SignatureSubproblemContext
     {
-        std::vector< uint64_t > sig;
-        std::vector< std::string > real_vars;
+        cobra::BudgetVector< uint64_t > sig;
+        cobra::BudgetVector< std::string > real_vars;
         EliminationResult elimination;
-        std::vector< uint32_t > original_indices;
+        cobra::BudgetVector< uint32_t > original_indices;
         bool needs_original_space_verification = true;
     };
 
     struct SignatureStatePayload
-    {
-        SignatureSubproblemContext ctx;
-    };
+    { SignatureSubproblemContext ctx; };
 
     struct SignatureCoeffStatePayload
     {
         SignatureSubproblemContext ctx;
-        std::vector< uint64_t > coeffs;
+        cobra::BudgetVector< uint64_t > coeffs;
     };
 
     struct CandidatePayload
     {
         std::unique_ptr< Expr > expr;
-        std::vector< std::string > real_vars;
+        cobra::BudgetVector< std::string > real_vars;
         ExprCost cost;
         PassId producing_pass;
         bool needs_original_space_verification = true;
@@ -122,8 +121,8 @@ namespace cobra {
     struct RemainderTargetContext
     {
         Evaluator eval;
-        std::vector< std::string > vars;
-        std::vector< uint32_t > remap_support;
+        cobra::BudgetVector< std::string > vars;
+        cobra::BudgetVector< uint32_t > remap_support;
     };
 
     struct CoreCandidatePayload
@@ -131,7 +130,7 @@ namespace cobra {
         std::unique_ptr< Expr > core_expr;
         ExtractorKind extractor_kind;
         uint8_t degree_used = 0;
-        std::vector< uint64_t > source_sig;
+        cobra::BudgetVector< uint64_t > source_sig;
         RemainderTargetContext target;
     };
 
@@ -141,10 +140,10 @@ namespace cobra {
         std::unique_ptr< Expr > prefix_expr;
         uint8_t prefix_degree = 0;
         Evaluator remainder_eval;
-        std::vector< uint64_t > source_sig;
-        std::vector< uint64_t > remainder_sig;
+        cobra::BudgetVector< uint64_t > source_sig;
+        cobra::BudgetVector< uint64_t > remainder_sig;
         EliminationResult remainder_elim;
-        std::vector< uint32_t > remainder_support;
+        cobra::BudgetVector< uint32_t > remainder_support;
         bool is_boolean_null = false;
         uint8_t degree_floor = 2;
         RemainderTargetContext target;
@@ -154,10 +153,10 @@ namespace cobra {
     {
         std::unique_ptr< Expr > outer_expr;
         AstSolveContext outer_ctx;
-        std::vector< LiftedBinding > bindings;
+        cobra::BudgetVector< LiftedBinding > bindings;
         uint32_t original_var_count = 0;
         ExprCost baseline_cost;
-        std::vector< uint64_t > source_sig;
+        cobra::BudgetVector< uint64_t > source_sig;
         // Parent-local context for the expression before adding the
         // new lifted virtuals. Nested lifting must resolve back into
         // this space, not necessarily the global original space.
@@ -167,35 +166,27 @@ namespace cobra {
     struct SemilinearContext
     {
         SemilinearIR ir;
-        std::vector< std::string > vars;
+        cobra::BudgetVector< std::string > vars;
         std::optional< Evaluator > evaluator;
     };
 
     struct NormalizedSemilinearPayload
-    {
-        SemilinearContext ctx;
-    };
+    { SemilinearContext ctx; };
 
     struct CheckedSemilinearPayload
-    {
-        SemilinearContext ctx;
-    };
+    { SemilinearContext ctx; };
 
     struct RewrittenSemilinearPayload
-    {
-        SemilinearContext ctx;
-    };
+    { SemilinearContext ctx; };
 
     struct CompetitionResolvedPayload
-    {
-        GroupId group_id;
-    };
+    { GroupId group_id; };
 
-    using StateData = std::variant<
-        AstPayload, SignatureStatePayload, SignatureCoeffStatePayload, CoreCandidatePayload,
-        RemainderStatePayload, NormalizedSemilinearPayload, CheckedSemilinearPayload,
-        RewrittenSemilinearPayload, LiftedSkeletonPayload, CandidatePayload,
-        CompetitionResolvedPayload >;
+    using StateData =
+        std::variant< AstPayload, SignatureStatePayload, SignatureCoeffStatePayload,
+                      CoreCandidatePayload, RemainderStatePayload, NormalizedSemilinearPayload,
+                      CheckedSemilinearPayload, RewrittenSemilinearPayload,
+                      LiftedSkeletonPayload, CandidatePayload, CompetitionResolvedPayload >;
 
     // ---------------------------------------------------------------
     // State features and item metadata
@@ -216,15 +207,15 @@ namespace cobra {
 
     struct ItemMetadata
     {
-        std::vector< uint64_t > sig_vector;
+        cobra::BudgetVector< uint64_t > sig_vector;
         VerificationState verification       = VerificationState::kUnverified;
         uint32_t structural_transform_rounds = 0;
         bool transform_produced_candidate    = false;
         bool candidate_failed_verification   = false;
         std::optional< ReasonCode > reason_code;
-        std::vector< ReasonFrame > cause_chain;
+        cobra::BudgetVector< ReasonFrame > cause_chain;
         std::optional< DecompositionMeta > decomposition_meta;
-        std::vector< ReasonFrame > decomposition_causes;
+        cobra::BudgetVector< ReasonFrame > decomposition_causes;
         ReasonDetail last_failure;
         std::optional< TransformTerminalSignal > structural_transform_terminal;
     };
@@ -245,7 +236,7 @@ namespace cobra {
         std::optional< GroupId > group_id;
         std::optional< Evaluator > evaluator_override;
         uint32_t evaluator_override_arity = 0;
-        std::vector< PassId > history;
+        cobra::BudgetVector< PassId > history;
     };
 
     // ---------------------------------------------------------------
@@ -256,7 +247,7 @@ namespace cobra {
     {
         StateKind kind;
         uint64_t payload_hash;
-        std::vector< std::string > vars;
+        cobra::BudgetVector< std::string > vars;
         uint32_t bitwidth;
         Provenance provenance;
 
@@ -281,14 +272,14 @@ namespace cobra {
         struct TermKey
         {
             uint64_t coeff = 0;
-            std::vector< GlobalVarIdx > support;
-            std::vector< uint64_t > truth_table;
+            cobra::BudgetVector< GlobalVarIdx > support;
+            cobra::BudgetVector< uint64_t > truth_table;
             uint64_t structural_hash               = 0;
             OperatorFamily provenance              = OperatorFamily::kMixed;
             bool operator==(const TermKey &) const = default;
         };
 
-        std::vector< TermKey > terms;
+        cobra::BudgetVector< TermKey > terms;
         bool operator==(const SemilinearFingerprintKey &) const = default;
     };
 
@@ -312,7 +303,7 @@ namespace cobra {
     {
         PassDecision decision;
         ItemDisposition disposition = ItemDisposition::kConsumeCurrent;
-        std::vector< WorkItem > next;
+        cobra::BudgetVector< WorkItem > next;
         ReasonDetail reason;
     };
 
@@ -333,7 +324,7 @@ namespace cobra {
         uint32_t max_depth_reached   = 0;
         uint32_t candidates_verified = 0;
         uint32_t queue_high_water    = 0;
-        std::vector< PassId > passes_attempted;
+        cobra::BudgetVector< PassId > passes_attempted;
     };
 
     struct RunMetadata
@@ -345,7 +336,7 @@ namespace cobra {
     struct OrchestratorContext
     {
         const Options &opts; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
-        const std::vector< std::string >
+        const cobra::BudgetVector< std::string >
             &original_vars; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
         std::optional< Evaluator > evaluator;
         uint32_t bitwidth = 64;
@@ -353,16 +344,16 @@ namespace cobra {
         // Parser-computed signature for the initial expression.
         // Used by RunBuildSignatureState on the first (non-rewritten)
         // pass to match legacy signature computation exactly.
-        std::vector< uint64_t > input_sig;
+        cobra::BudgetVector< uint64_t > input_sig;
         // Whether the NOT-over-arith lowering fired on the input.
         // When true, RunBuildSignatureState must recompute the
         // signature from the AST because the parser's sig is stale.
         bool lowering_fired = false;
         // Competition group registry for Phase 3 technique competition.
-        absl::flat_hash_map< GroupId, CompetitionGroup > competition_groups;
+        cobra::BudgetFlatMap< GroupId, CompetitionGroup > competition_groups;
         GroupId next_group_id = 0;
         // Join state registry for multi-operand rewrites.
-        absl::flat_hash_map< JoinId, JoinState > join_states;
+        cobra::BudgetFlatMap< JoinId, JoinState > join_states;
         JoinId next_join_id = 0;
     };
 
@@ -410,7 +401,7 @@ namespace cobra {
         // single uint64_t per fingerprint is enough. This makes Record /
         // HasAttempted O(1) and prevents the unbounded vector growth a
         // future fingerprint refactor could otherwise expose.
-        absl::flat_hash_map< StateFingerprint, uint64_t > cache_;
+        cobra::BudgetFlatMap< StateFingerprint, uint64_t > cache_;
     };
 
     // ---------------------------------------------------------------
@@ -427,7 +418,7 @@ namespace cobra {
         size_t HighWaterMark() const;
 
       private:
-        std::vector< WorkItem > items_;
+        cobra::BudgetVector< WorkItem > items_;
         size_t high_water_ = 0;
     };
 
@@ -435,10 +426,10 @@ namespace cobra {
     // Scheduler — determines which passes to try for a WorkItem
     // ---------------------------------------------------------------
 
-    std::optional< PassId > SelectNextPass(
-        const WorkItem &item, const OrchestratorPolicy &policy, uint32_t verifications_used,
-        const PassAttemptCache &cache
-    );
+    std::optional< PassId > SelectNextPass(const WorkItem &item,
+                                           const OrchestratorPolicy &policy,
+                                           uint32_t verifications_used,
+                                           const PassAttemptCache &cache);
 
     // ---------------------------------------------------------------
     // Competition group handle release
@@ -447,6 +438,6 @@ namespace cobra {
     // Decrements a group's open_handles. Returns a
     // kCompetitionResolved WorkItem when handles reach zero.
     std::optional< WorkItem >
-    ReleaseHandle(absl::flat_hash_map< GroupId, CompetitionGroup > &groups, GroupId group_id);
+    ReleaseHandle(cobra::BudgetFlatMap< GroupId, CompetitionGroup > &groups, GroupId group_id);
 
 } // namespace cobra

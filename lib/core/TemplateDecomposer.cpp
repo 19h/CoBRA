@@ -1,4 +1,5 @@
 #include "cobra/core/TemplateDecomposer.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/ExprCost.h"
 #include "cobra/core/MathUtils.h"
@@ -42,9 +43,7 @@ namespace cobra {
         constexpr uint32_t kMaxVars = 6;
 
         struct HWY_ALIGN_MAX ProbeVals : std::array< uint64_t, kNProbes >
-        {
-            using std::array< uint64_t, kNProbes >::array;
-        };
+        { using std::array< uint64_t, kNProbes >::array; };
 
         namespace hn = hwy::HWY_NAMESPACE;
 
@@ -65,12 +64,15 @@ namespace cobra {
             // XOR-fold with position-dependent rotation to avoid
             // commutative cancellation (a^b == b^a).
             uint64_t h = 0;
-            for (size_t i = 0; i < kNProbes; ++i) { h ^= v[i] * (0x9E3779B97F4A7C15ULL + i); }
+            for (size_t i = 0; i < kNProbes; ++i) {
+                ::cobra::budget::Checkpoint();
+                h ^= v[i] * (0x9E3779B97F4A7C15ULL + i);
+            }
             return h;
         }
 
         // Maps 64-bit probe-value fingerprints to pool/inner indices.
-        // Uses absl::flat_hash_map for SIMD-accelerated lookup.
+        // Uses cobra::BudgetFlatMap for SIMD-accelerated lookup.
         class ValMap
         {
           public:
@@ -88,7 +90,7 @@ namespace cobra {
             bool contains(const ProbeVals &key) const { return find(key) != nullptr; }
 
           private:
-            absl::flat_hash_map< uint64_t, uint32_t > map_;
+            cobra::BudgetFlatMap< uint64_t, uint32_t > map_;
             mutable size_t idx_buf_ = 0;
         };
 
@@ -100,19 +102,21 @@ namespace cobra {
         };
 
         // Evaluate expr at all probe points.
-        ProbeVals Probe(
-            const Expr &e, const std::vector< std::vector< uint64_t > > &pts, uint32_t bw
-        ) { // NOLINT(hicpp-named-parameter,readability-named-parameter)
+        ProbeVals
+        Probe(const Expr &e, const cobra::BudgetVector< cobra::BudgetVector< uint64_t > > &pts,
+              uint32_t bw) { // NOLINT(hicpp-named-parameter,readability-named-parameter)
             ProbeVals v;
-            for (size_t i = 0; i < kNProbes; ++i) { v[i] = EvalExpr(e, pts[i], bw); }
+            for (size_t i = 0; i < kNProbes; ++i) {
+                ::cobra::budget::Checkpoint();
+                v[i] = EvalExpr(e, pts[i], bw);
+            }
             return v;
         }
 
         // Add atom with deduplication; keep the cheapest expression.
         // NOLINTNEXTLINE(readability-identifier-naming)
-        void Push(
-            std::vector< Atom > &pool, ValMap &idx, std::unique_ptr< Expr > e, ProbeVals vals
-        ) {
+        void Push(cobra::BudgetVector< Atom > &pool, ValMap &idx, std::unique_ptr< Expr > e,
+                  ProbeVals vals) {
             const auto *slot = idx.find(vals);
             if (slot != nullptr) {
                 auto new_cost = ComputeCost(*e).cost;
@@ -129,10 +133,9 @@ namespace cobra {
 
         // Build the bounded atom pool.
         // NOLINTNEXTLINE(readability-identifier-naming)
-        void Populate(
-            std::vector< Atom > &pool, ValMap &idx, uint32_t nv,
-            const std::vector< std::vector< uint64_t > > &pts, uint32_t bw
-        ) {
+        void Populate(cobra::BudgetVector< Atom > &pool, ValMap &idx, uint32_t nv,
+                      const cobra::BudgetVector< cobra::BudgetVector< uint64_t > > &pts,
+                      uint32_t bw) {
             const uint64_t mask = (bw >= 64) ? UINT64_MAX : ((1ULL << bw) - 1);
             auto add            = [&](std::unique_ptr< Expr > e) {
                 auto v = Probe(*e, pts, bw);
@@ -147,6 +150,7 @@ namespace cobra {
 
             // Variables, negations, NOT
             for (uint32_t i = 0; i < nv; ++i) {
+                ::cobra::budget::Checkpoint();
                 add(Expr::Variable(i));
                 add(Expr::Negate(Expr::Variable(i)));
                 add(Expr::BitwiseNot(Expr::Variable(i)));
@@ -154,7 +158,9 @@ namespace cobra {
 
             // Pairwise commutative: &, |, ^, +, *
             for (uint32_t i = 0; i < nv; ++i) {
+                ::cobra::budget::Checkpoint();
                 for (uint32_t j = i; j < nv; ++j) {
+                    ::cobra::budget::Checkpoint();
                     auto vi = [i] { return Expr::Variable(i); };
                     auto vj = [j] { return Expr::Variable(j); };
                     add(Expr::BitwiseAnd(vi(), vj()));
@@ -167,7 +173,9 @@ namespace cobra {
 
             // Subtraction (non-commutative)
             for (uint32_t i = 0; i < nv; ++i) {
+                ::cobra::budget::Checkpoint();
                 for (uint32_t j = 0; j < nv; ++j) {
+                    ::cobra::budget::Checkpoint();
                     if (i == j) { continue; }
                     add(Expr::Add(Expr::Variable(i), Expr::Negate(Expr::Variable(j))));
                 }
@@ -178,9 +186,11 @@ namespace cobra {
             // instead of re-evaluating through EvalExpr (16 calls each).
             const size_t base = pool.size();
             for (size_t k = 0; k < base; ++k) {
+                ::cobra::budget::Checkpoint();
                 ProbeVals neg_v;
                 ProbeVals not_v;
                 for (size_t i = 0; i < kNProbes; ++i) {
+                    ::cobra::budget::Checkpoint();
                     neg_v[i] = (-pool[k].vals[i]) & mask;
                     not_v[i] = (~pool[k].vals[i]) & mask;
                 }
@@ -197,36 +207,37 @@ namespace cobra {
             switch (g) {
                 case Gate::kAnd:
                     for (size_t i = 0; i < kNProbes; i += kN) {
+                        ::cobra::budget::Checkpoint();
                         hn::Store(hn::And(hn::Load(d, &a[i]), hn::Load(d, &b[i])), d, &r[i]);
                     }
                     break;
                 case Gate::kOr:
                     for (size_t i = 0; i < kNProbes; i += kN) {
+                        ::cobra::budget::Checkpoint();
                         hn::Store(hn::Or(hn::Load(d, &a[i]), hn::Load(d, &b[i])), d, &r[i]);
                     }
                     break;
                 case Gate::kXor:
                     for (size_t i = 0; i < kNProbes; i += kN) {
+                        ::cobra::budget::Checkpoint();
                         hn::Store(hn::Xor(hn::Load(d, &a[i]), hn::Load(d, &b[i])), d, &r[i]);
                     }
                     break;
                 case Gate::kAdd: {
                     const auto vm = hn::Set(d, mask);
                     for (size_t i = 0; i < kNProbes; i += kN) {
-                        hn::Store(
-                            hn::And(hn::Add(hn::Load(d, &a[i]), hn::Load(d, &b[i])), vm), d,
-                            &r[i]
-                        );
+                        ::cobra::budget::Checkpoint();
+                        hn::Store(hn::And(hn::Add(hn::Load(d, &a[i]), hn::Load(d, &b[i])), vm),
+                                  d, &r[i]);
                     }
                     break;
                 }
                 case Gate::kMul: {
                     const auto vm = hn::Set(d, mask);
                     for (size_t i = 0; i < kNProbes; i += kN) {
-                        hn::Store(
-                            hn::And(hn::Mul(hn::Load(d, &a[i]), hn::Load(d, &b[i])), vm), d,
-                            &r[i]
-                        );
+                        ::cobra::budget::Checkpoint();
+                        hn::Store(hn::And(hn::Mul(hn::Load(d, &a[i]), hn::Load(d, &b[i])), vm),
+                                  d, &r[i]);
                     }
                     break;
                 }
@@ -254,70 +265,57 @@ namespace cobra {
 
         // Check if G(a, b) == target across all probes (Highway-vectorized).
         // Accumulates diff = G(a,b) ^ target via OR; returns true when zero.
-        bool GateMatches(
-            const ProbeVals &a, const ProbeVals &b, const ProbeVals &target, Gate g,
-            uint64_t mask
-        ) {
+        bool GateMatches(const ProbeVals &a, const ProbeVals &b, const ProbeVals &target,
+                         Gate g, uint64_t mask) {
             const D64 d;
             const size_t kN = hn::Lanes(d);
             auto acc        = hn::Zero(d);
             switch (g) {
                 case Gate::kAnd:
                     for (size_t i = 0; i < kNProbes; i += kN) {
-                        acc = hn::Or(
-                            acc,
-                            hn::Xor(
-                                hn::And(hn::Load(d, &a[i]), hn::Load(d, &b[i])),
-                                hn::Load(d, &target[i])
-                            )
-                        );
+                        ::cobra::budget::Checkpoint();
+                        acc = hn::Or(acc,
+                                     hn::Xor(hn::And(hn::Load(d, &a[i]), hn::Load(d, &b[i])),
+                                             hn::Load(d, &target[i])));
                     }
                     break;
                 case Gate::kOr:
                     for (size_t i = 0; i < kNProbes; i += kN) {
-                        acc = hn::Or(
-                            acc,
-                            hn::Xor(
-                                hn::Or(hn::Load(d, &a[i]), hn::Load(d, &b[i])),
-                                hn::Load(d, &target[i])
-                            )
-                        );
+                        ::cobra::budget::Checkpoint();
+                        acc = hn::Or(acc,
+                                     hn::Xor(hn::Or(hn::Load(d, &a[i]), hn::Load(d, &b[i])),
+                                             hn::Load(d, &target[i])));
                     }
                     break;
                 case Gate::kXor:
                     for (size_t i = 0; i < kNProbes; i += kN) {
-                        acc = hn::Or(
-                            acc,
-                            hn::Xor(
-                                hn::Xor(hn::Load(d, &a[i]), hn::Load(d, &b[i])),
-                                hn::Load(d, &target[i])
-                            )
-                        );
+                        ::cobra::budget::Checkpoint();
+                        acc = hn::Or(acc,
+                                     hn::Xor(hn::Xor(hn::Load(d, &a[i]), hn::Load(d, &b[i])),
+                                             hn::Load(d, &target[i])));
                     }
                     break;
                 case Gate::kAdd: {
                     const auto vm = hn::Set(d, mask);
                     for (size_t i = 0; i < kNProbes; i += kN) {
+                        ::cobra::budget::Checkpoint();
                         acc = hn::Or(
                             acc,
                             hn::Xor(
                                 hn::And(hn::Add(hn::Load(d, &a[i]), hn::Load(d, &b[i])), vm),
-                                hn::Load(d, &target[i])
-                            )
-                        );
+                                hn::Load(d, &target[i])));
                     }
                     break;
                 }
                 case Gate::kMul: {
                     const auto vm = hn::Set(d, mask);
                     for (size_t i = 0; i < kNProbes; i += kN) {
+                        ::cobra::budget::Checkpoint();
                         acc = hn::Or(
                             acc,
                             hn::Xor(
                                 hn::And(hn::Mul(hn::Load(d, &a[i]), hn::Load(d, &b[i])), vm),
-                                hn::Load(d, &target[i])
-                            )
-                        );
+                                hn::Load(d, &target[i])));
                     }
                     break;
                 }
@@ -326,26 +324,26 @@ namespace cobra {
         }
 
         // Compute residual for invertible gate: B = target G^{-1} A.
-        ProbeVals
-        GateResidual(const ProbeVals &target, const ProbeVals &a, Gate g, uint64_t mask) {
+        ProbeVals GateResidual(const ProbeVals &target, const ProbeVals &a, Gate g,
+                               uint64_t mask) {
             ProbeVals r;
             const D64 d;
             const size_t kN = hn::Lanes(d);
             switch (g) {
                 case Gate::kXor:
                     for (size_t i = 0; i < kNProbes; i += kN) {
-                        hn::Store(
-                            hn::Xor(hn::Load(d, &target[i]), hn::Load(d, &a[i])), d, &r[i]
-                        );
+                        ::cobra::budget::Checkpoint();
+                        hn::Store(hn::Xor(hn::Load(d, &target[i]), hn::Load(d, &a[i])), d,
+                                  &r[i]);
                     }
                     break;
                 case Gate::kAdd: {
                     const auto vm = hn::Set(d, mask);
                     for (size_t i = 0; i < kNProbes; i += kN) {
+                        ::cobra::budget::Checkpoint();
                         hn::Store(
                             hn::And(hn::Sub(hn::Load(d, &target[i]), hn::Load(d, &a[i])), vm),
-                            d, &r[i]
-                        );
+                            d, &r[i]);
                     }
                     break;
                 }
@@ -357,8 +355,8 @@ namespace cobra {
         }
 
         // Build an expression tree from a gate and two operands.
-        std::unique_ptr< Expr >
-        GateExpr(Gate g, std::unique_ptr< Expr > a, std::unique_ptr< Expr > b) {
+        std::unique_ptr< Expr > GateExpr(Gate g, std::unique_ptr< Expr > a,
+                                         std::unique_ptr< Expr > b) {
             switch (g) {
                 case Gate::kAnd:
                     return Expr::BitwiseAnd(std::move(a), std::move(b));
@@ -385,19 +383,21 @@ namespace cobra {
 
         struct InnerCompositions
         {
-            std::vector< InnerComp > comps;
+            cobra::BudgetVector< InnerComp > comps;
             ValMap index;
-            absl::flat_hash_map< uint64_t, std::vector< size_t > > mul_probe0_buckets;
+            cobra::BudgetFlatMap< uint64_t, cobra::BudgetVector< size_t > > mul_probe0_buckets;
         };
 
-        InnerCompositions BuildInnerCompositions(
-            const std::vector< Atom > &pool, const ValMap &vmap, uint64_t mask
-        ) {
+        InnerCompositions BuildInnerCompositions(const cobra::BudgetVector< Atom > &pool,
+                                                 const ValMap &vmap, uint64_t mask) {
             InnerCompositions inner;
             const size_t pn = pool.size();
             for (auto g_in : kAllGates) {
+                ::cobra::budget::Checkpoint();
                 for (size_t bi = 0; bi < pn; ++bi) {
+                    ::cobra::budget::Checkpoint();
                     for (size_t ci = bi; ci < pn; ++ci) {
+                        ::cobra::budget::Checkpoint();
                         auto v = GateApply(pool[bi].vals, pool[ci].vals, g_in, mask);
                         if (vmap.contains(v)) { continue; }
                         if (inner.index.contains(v)) { continue; }
@@ -414,10 +414,9 @@ namespace cobra {
 
         // Try to verify and update the best result.
         // NOLINTNEXTLINE(readability-identifier-naming)
-        bool TryUpdate(
-            std::optional< SignaturePayload > &best, std::unique_ptr< Expr > candidate,
-            const Evaluator &eval, uint32_t num_vars, uint32_t bw, const ExprCost *baseline
-        ) {
+        bool TryUpdate(std::optional< SignaturePayload > &best,
+                       std::unique_ptr< Expr > candidate, const Evaluator &eval,
+                       uint32_t num_vars, uint32_t bw, const ExprCost *baseline) {
             COBRA_ZONE_N("TemplateFWCheck");
             auto chk = FullWidthCheckEval(eval, num_vars, *candidate, bw);
             if (!chk.passed) { return false; }
@@ -435,40 +434,41 @@ namespace cobra {
         }
 
         // Layer 1: target = G(A, B) for atoms A, B.
-        std::optional< SignaturePayload > Layer1(
-            const ProbeVals &target, std::span< const Atom > pool, const ValMap &vmap,
-            uint64_t mask, const Evaluator &eval, uint32_t nv, uint32_t bw,
-            const ExprCost *baseline
-        ) {
+        std::optional< SignaturePayload > Layer1(const ProbeVals &target,
+                                                 std::span< const Atom > pool,
+                                                 const ValMap &vmap, uint64_t mask,
+                                                 const Evaluator &eval, uint32_t nv,
+                                                 uint32_t bw, const ExprCost *baseline) {
             std::optional< SignaturePayload > best;
             const size_t pool_n = pool.size();
 
             for (auto g : kAllGates) {
+                ::cobra::budget::Checkpoint();
                 if (GateInvertible(g)) {
                     for (size_t ai = 0; ai < pool_n; ++ai) {
+                        ::cobra::budget::Checkpoint();
                         auto res         = GateResidual(target, pool[ai].vals, g, mask);
                         const auto *slot = vmap.find(res);
                         if (slot == nullptr) { continue; }
-                        auto e = GateExpr(
-                            g, CloneExpr(*pool[ai].expr), CloneExpr(*pool[*slot].expr)
-                        );
+                        auto e = GateExpr(g, CloneExpr(*pool[ai].expr),
+                                          CloneExpr(*pool[*slot].expr));
                         TryUpdate(best, std::move(e), eval, nv, bw, baseline);
                     }
                 } else {
                     for (size_t ai = 0; ai < pool_n; ++ai) {
+                        ::cobra::budget::Checkpoint();
                         for (size_t bi = 0; bi < pool_n; ++bi) {
-                            if (!Probe0Matches(
-                                    pool[ai].vals[0], pool[bi].vals[0], target[0], g, mask
-                                ))
+                            ::cobra::budget::Checkpoint();
+                            if (!Probe0Matches(pool[ai].vals[0], pool[bi].vals[0], target[0], g,
+                                               mask))
                             {
                                 continue;
                             }
                             if (!GateMatches(pool[ai].vals, pool[bi].vals, target, g, mask)) {
                                 continue;
                             }
-                            auto e = GateExpr(
-                                g, CloneExpr(*pool[ai].expr), CloneExpr(*pool[bi].expr)
-                            );
+                            auto e = GateExpr(g, CloneExpr(*pool[ai].expr),
+                                              CloneExpr(*pool[bi].expr));
                             TryUpdate(best, std::move(e), eval, nv, bw, baseline);
                         }
                     }
@@ -488,16 +488,16 @@ namespace cobra {
             switch (g) {
                 case Gate::kAnd:
                     for (size_t i = 0; i < kNProbes; i += kN) {
-                        acc = hn::Or(
-                            acc, hn::AndNot(hn::Load(d, &a[i]), hn::Load(d, &target[i]))
-                        );
+                        ::cobra::budget::Checkpoint();
+                        acc = hn::Or(acc,
+                                     hn::AndNot(hn::Load(d, &a[i]), hn::Load(d, &target[i])));
                     }
                     break;
                 case Gate::kOr:
                     for (size_t i = 0; i < kNProbes; i += kN) {
-                        acc = hn::Or(
-                            acc, hn::AndNot(hn::Load(d, &target[i]), hn::Load(d, &a[i]))
-                        );
+                        ::cobra::budget::Checkpoint();
+                        acc = hn::Or(acc,
+                                     hn::AndNot(hn::Load(d, &target[i]), hn::Load(d, &a[i])));
                     }
                     break;
                 default:
@@ -508,13 +508,14 @@ namespace cobra {
 
         template< typename T >
             requires (std::same_as< T, Atom > || std::same_as< T, InnerComp >)
-        std::vector< size_t > CollectCompatibleIndices(
-            std::span< const T > candidates, const ProbeVals &target, Gate g
-        ) {
-            std::vector< size_t > indices;
+        cobra::BudgetVector< size_t > CollectCompatibleIndices(std::span< const T > candidates,
+                                                               const ProbeVals &target,
+                                                               Gate g) {
+            cobra::BudgetVector< size_t > indices;
             const size_t n = candidates.size();
             indices.reserve(n);
             for (size_t i = 0; i < n; ++i) {
+                ::cobra::budget::Checkpoint();
                 if (Compatible(candidates[i].vals, target, g)) { indices.push_back(i); }
             }
             return indices;
@@ -525,12 +526,10 @@ namespace cobra {
             const size_t kN = hn::Lanes(d);
             auto acc        = hn::Zero(d);
             for (size_t i = 0; i < kNProbes; i += kN) {
-                acc = hn::Or(
-                    acc,
-                    hn::Xor(
-                        hn::And(hn::Load(d, &a[i]), hn::Load(d, &b[i])), hn::Load(d, &target[i])
-                    )
-                );
+                ::cobra::budget::Checkpoint();
+                acc = hn::Or(acc,
+                             hn::Xor(hn::And(hn::Load(d, &a[i]), hn::Load(d, &b[i])),
+                                     hn::Load(d, &target[i])));
             }
             return hn::AllFalse(d, hn::Ne(acc, hn::Zero(d)));
         }
@@ -540,20 +539,16 @@ namespace cobra {
             const size_t kN = hn::Lanes(d);
             auto acc        = hn::Zero(d);
             for (size_t i = 0; i < kNProbes; i += kN) {
-                acc = hn::Or(
-                    acc,
-                    hn::Xor(
-                        hn::Or(hn::Load(d, &a[i]), hn::Load(d, &b[i])), hn::Load(d, &target[i])
-                    )
-                );
+                ::cobra::budget::Checkpoint();
+                acc = hn::Or(acc,
+                             hn::Xor(hn::Or(hn::Load(d, &a[i]), hn::Load(d, &b[i])),
+                                     hn::Load(d, &target[i])));
             }
             return hn::AllFalse(d, hn::Ne(acc, hn::Zero(d)));
         }
 
-        bool MulMatches(
-            const ProbeVals &a, const ProbeVals &b, const ProbeVals &target, uint64_t mask,
-            size_t start_probe = 0
-        ) {
+        bool MulMatches(const ProbeVals &a, const ProbeVals &b, const ProbeVals &target,
+                        uint64_t mask, size_t start_probe = 0) {
             const D64 d;
             const size_t kN = hn::Lanes(d);
             const auto vm   = hn::Set(d, mask);
@@ -561,16 +556,16 @@ namespace cobra {
             // Process all kNProbes via SIMD. When start_probe > 0 the
             // skipped prefix lanes are zeroed so they can't set diff bits.
             for (size_t i = 0; i < kNProbes; i += kN) {
-                auto diff = hn::Xor(
-                    hn::And(hn::Mul(hn::Load(d, &a[i]), hn::Load(d, &b[i])), vm),
-                    hn::Load(d, &target[i])
-                );
+                ::cobra::budget::Checkpoint();
+                auto diff =
+                    hn::Xor(hn::And(hn::Mul(hn::Load(d, &a[i]), hn::Load(d, &b[i])), vm),
+                            hn::Load(d, &target[i]));
                 if (i < start_probe) {
                     // Zero lanes before start_probe so they don't contribute.
                     auto lane_idx = hn::Iota(d, static_cast< uint64_t >(i));
                     diff          = hn::IfThenElseZero(
-                        hn::Ge(lane_idx, hn::Set(d, static_cast< uint64_t >(start_probe))), diff
-                    );
+                        hn::Ge(lane_idx, hn::Set(d, static_cast< uint64_t >(start_probe))),
+                        diff);
                 }
                 acc = hn::Or(acc, diff);
             }
@@ -581,10 +576,10 @@ namespace cobra {
         // admissible inner[0] values and restrict the scan to matching buckets.
         // Falls back to a full scan when probe 0 is too degenerate to be useful.
         bool CollectMulProbe0Candidates(
-            const absl::flat_hash_map< uint64_t, std::vector< size_t > > &probe0_buckets,
+            const cobra::BudgetFlatMap< uint64_t, cobra::BudgetVector< size_t > >
+                &probe0_buckets,
             uint64_t lhs_probe0, uint64_t target_probe0, uint32_t bitwidth,
-            std::vector< size_t > &out
-        ) {
+            cobra::BudgetVector< size_t > &out) {
             constexpr uint32_t kMaxEnumeratedShift = 8;
 
             out.clear();
@@ -622,17 +617,17 @@ namespace cobra {
             const uint64_t solution_count = 1ULL << twos;
             const uint64_t full_mask      = Bitmask(bitwidth);
             for (uint64_t k = 0; k < solution_count; ++k) {
+                ::cobra::budget::Checkpoint();
                 append_bucket((base_solution + (k * step)) & full_mask);
             }
             return true;
         }
 
         // Layer 2: target = G_out(A, G_in(B, C)).
-        std::optional< SignaturePayload > Layer2(
-            const ProbeVals &target, std::span< const Atom > pool,
-            const InnerCompositions &inner_cache, uint64_t mask, const Evaluator &eval,
-            uint32_t nv, uint32_t bw, const ExprCost *baseline
-        ) {
+        std::optional< SignaturePayload >
+        Layer2(const ProbeVals &target, std::span< const Atom > pool,
+               const InnerCompositions &inner_cache, uint64_t mask, const Evaluator &eval,
+               uint32_t nv, uint32_t bw, const ExprCost *baseline) {
             std::span< const InnerComp > inner = inner_cache.comps;
             const auto &inner_idx              = inner_cache.index;
             std::optional< SignaturePayload > best;
@@ -640,9 +635,8 @@ namespace cobra {
             COBRA_PLOT("L2InnerSize", static_cast< int64_t >(inner.size()));
 
             auto make_inner = [&](const InnerComp &ic) {
-                return GateExpr(
-                    ic.gate, CloneExpr(*pool[ic.bi].expr), CloneExpr(*pool[ic.ci].expr)
-                );
+                return GateExpr(ic.gate, CloneExpr(*pool[ic.bi].expr),
+                                CloneExpr(*pool[ic.ci].expr));
             };
 
             // --- Invertible gates (XOR, ADD): hash lookup O(pool + inner) ---
@@ -650,8 +644,10 @@ namespace cobra {
                 COBRA_ZONE_N("L2Invertible");
                 // Case A: G_out(base_atom, inner_comp)
                 for (auto g_out : kAllGates) {
+                    ::cobra::budget::Checkpoint();
                     if (!GateInvertible(g_out)) { continue; }
                     for (const auto &ai : pool) {
+                        ::cobra::budget::Checkpoint();
                         auto res         = GateResidual(target, ai.vals, g_out, mask);
                         const auto *slot = inner_idx.find(res);
                         if (slot == nullptr) { continue; }
@@ -662,8 +658,10 @@ namespace cobra {
                 }
                 // Case B: G_out(inner_comp, inner_comp)
                 for (auto g_out : kAllGates) {
+                    ::cobra::budget::Checkpoint();
                     if (!GateInvertible(g_out)) { continue; }
                     for (size_t ii = 0; ii < inner.size(); ++ii) {
+                        ::cobra::budget::Checkpoint();
                         auto res         = GateResidual(target, inner[ii].vals, g_out, mask);
                         const auto *slot = inner_idx.find(res);
                         if (slot == nullptr) { continue; }
@@ -689,13 +687,16 @@ namespace cobra {
                 COBRA_PLOT("L2CompatOrInner", static_cast< int64_t >(compat_inner_or.size()));
 
                 for (auto g_out : { Gate::kAnd, Gate::kOr }) {
+                    ::cobra::budget::Checkpoint();
                     const auto &pool_compat =
                         (g_out == Gate::kAnd) ? compat_pool_and : compat_pool_or;
                     const auto &inner_compat =
                         (g_out == Gate::kAnd) ? compat_inner_and : compat_inner_or;
                     for (size_t ai_idx : pool_compat) {
+                        ::cobra::budget::Checkpoint();
                         const auto &ai = pool[ai_idx];
                         for (size_t ii_idx : inner_compat) {
+                            ::cobra::budget::Checkpoint();
                             const auto &ii = inner[ii_idx];
                             if (!Probe0Matches(ai.vals[0], ii.vals[0], target[0], g_out, mask))
                             {
@@ -717,18 +718,19 @@ namespace cobra {
             // --- MUL gate: full scan (no algebraic shortcut) ---
             {
                 COBRA_ZONE_N("L2Mul");
-                std::vector< size_t > mul_probe0_candidates;
+                cobra::BudgetVector< size_t > mul_probe0_candidates;
                 [[maybe_unused]] size_t mul_bucketed_outer = 0;
                 [[maybe_unused]] size_t mul_fallback_outer = 0;
 
                 for (const auto &ai : pool) {
-                    const bool used_probe0_filter = CollectMulProbe0Candidates(
-                        inner_cache.mul_probe0_buckets, ai.vals[0], target[0], bw,
-                        mul_probe0_candidates
-                    );
+                    ::cobra::budget::Checkpoint();
+                    const bool used_probe0_filter =
+                        CollectMulProbe0Candidates(inner_cache.mul_probe0_buckets, ai.vals[0],
+                                                   target[0], bw, mul_probe0_candidates);
                     if (used_probe0_filter) {
                         ++mul_bucketed_outer;
                         for (size_t ii_idx : mul_probe0_candidates) {
+                            ::cobra::budget::Checkpoint();
                             const auto &ii = inner[ii_idx];
                             if (!MulMatches(ai.vals, ii.vals, target, mask, 1)) { continue; }
                             auto e = GateExpr(Gate::kMul, CloneExpr(*ai.expr), make_inner(ii));
@@ -740,6 +742,7 @@ namespace cobra {
 
                     ++mul_fallback_outer;
                     for (const auto &ii : inner) {
+                        ::cobra::budget::Checkpoint();
                         if (!MulMatches(ai.vals, ii.vals, target, mask)) { continue; }
                         auto e = GateExpr(Gate::kMul, CloneExpr(*ai.expr), make_inner(ii));
                         TryUpdate(best, std::move(e), eval, nv, bw, baseline);
@@ -754,32 +757,34 @@ namespace cobra {
             return best;
         }
 
-        std::optional< SignaturePayload > Layer3(
-            const ProbeVals &target, std::span< const Atom > pool, const ValMap &vmap,
-            const InnerCompositions &inner_cache, uint64_t mask, const Evaluator &eval,
-            uint32_t nv, uint32_t bw, const ExprCost *baseline
-        ) {
+        std::optional< SignaturePayload >
+        Layer3(const ProbeVals &target, std::span< const Atom > pool, const ValMap &vmap,
+               const InnerCompositions &inner_cache, uint64_t mask, const Evaluator &eval,
+               uint32_t nv, uint32_t bw, const ExprCost *baseline) {
             std::span< const InnerComp > inner = inner_cache.comps;
             const auto &inner_idx              = inner_cache.index;
             std::optional< SignaturePayload > best;
             const size_t pool_n = pool.size();
 
             auto make_inner = [&](const InnerComp &ic) {
-                return GateExpr(
-                    ic.gate, CloneExpr(*pool[ic.bi].expr), CloneExpr(*pool[ic.ci].expr)
-                );
+                return GateExpr(ic.gate, CloneExpr(*pool[ic.bi].expr),
+                                CloneExpr(*pool[ic.ci].expr));
             };
 
             // Invertible G1, invertible G2: hash-based lookup.
             for (auto g1 : kAllGates) {
+                ::cobra::budget::Checkpoint();
                 if (!GateInvertible(g1)) { continue; }
                 for (size_t ai = 0; ai < pool_n; ++ai) {
+                    ::cobra::budget::Checkpoint();
                     auto r1 = GateResidual(target, pool[ai].vals, g1, mask);
                     if (vmap.contains(r1)) { continue; }
 
                     for (auto g2 : kAllGates) {
+                        ::cobra::budget::Checkpoint();
                         if (!GateInvertible(g2)) { continue; }
                         for (size_t bi = 0; bi < pool_n; ++bi) {
+                            ::cobra::budget::Checkpoint();
                             auto r2 = GateResidual(r1, pool[bi].vals, g2, mask);
                             std::unique_ptr< Expr > r2_expr;
                             {
@@ -820,11 +825,10 @@ namespace cobra {
         //
         // This covers overlap-conditioned patterns like:
         //   Add(overlap, Neg(And(neg_var, Mul(overlap, var))))
-        std::optional< SignaturePayload > Layer4(
-            const ProbeVals &target, std::span< const Atom > pool, const ValMap &vmap,
-            const InnerCompositions &inner_cache, uint64_t mask, const Evaluator &eval,
-            uint32_t nv, uint32_t bw, const ExprCost *baseline
-        ) {
+        std::optional< SignaturePayload >
+        Layer4(const ProbeVals &target, std::span< const Atom > pool, const ValMap &vmap,
+               const InnerCompositions &inner_cache, uint64_t mask, const Evaluator &eval,
+               uint32_t nv, uint32_t bw, const ExprCost *baseline) {
             std::span< const InnerComp > inner = inner_cache.comps;
             const auto &inner_idx              = inner_cache.index;
             std::optional< SignaturePayload > best;
@@ -832,22 +836,25 @@ namespace cobra {
             const size_t inner_n = inner.size();
 
             auto make_inner = [&](const InnerComp &ic) {
-                return GateExpr(
-                    ic.gate, CloneExpr(*pool[ic.bi].expr), CloneExpr(*pool[ic.ci].expr)
-                );
+                return GateExpr(ic.gate, CloneExpr(*pool[ic.bi].expr),
+                                CloneExpr(*pool[ic.ci].expr));
             };
 
-            std::vector< size_t > mul_candidates;
+            cobra::BudgetVector< size_t > mul_candidates;
             for (auto g1 : kAllGates) {
+                ::cobra::budget::Checkpoint();
                 if (!GateInvertible(g1)) { continue; }
                 for (size_t ai = 0; ai < pool_n; ++ai) {
+                    ::cobra::budget::Checkpoint();
                     auto r1 = GateResidual(target, pool[ai].vals, g1, mask);
                     if (vmap.contains(r1)) { continue; }
 
                     // Try Neg and Not of the residual
                     for (int wrap = 0; wrap < 2; ++wrap) {
+                        ::cobra::budget::Checkpoint();
                         ProbeVals lifted;
                         for (size_t i = 0; i < kNProbes; ++i) {
+                            ::cobra::budget::Checkpoint();
                             lifted[i] = (wrap == 0) ? ((~r1[i] + 1) & mask) : (~r1[i] & mask);
                         }
 
@@ -872,13 +879,14 @@ namespace cobra {
                         // with a single integer comparison before touching
                         // the full 16-probe arrays.
                         for (auto g2 : { Gate::kAnd, Gate::kOr }) {
+                            ::cobra::budget::Checkpoint();
                             for (size_t bi = 0; bi < pool_n; ++bi) {
+                                ::cobra::budget::Checkpoint();
                                 if (!Compatible(pool[bi].vals, lifted, g2)) { continue; }
                                 for (size_t ii = 0; ii < inner_n; ++ii) {
-                                    if (!Probe0Matches(
-                                            pool[bi].vals[0], inner[ii].vals[0], lifted[0], g2,
-                                            mask
-                                        ))
+                                    ::cobra::budget::Checkpoint();
+                                    if (!Probe0Matches(pool[bi].vals[0], inner[ii].vals[0],
+                                                       lifted[0], g2, mask))
                                     {
                                         continue;
                                     }
@@ -886,15 +894,13 @@ namespace cobra {
                                         ? AndMatches(pool[bi].vals, inner[ii].vals, lifted)
                                         : OrMatches(pool[bi].vals, inner[ii].vals, lifted);
                                     if (!matches) { continue; }
-                                    auto g2_e = GateExpr(
-                                        g2, CloneExpr(*pool[bi].expr), make_inner(inner[ii])
-                                    );
+                                    auto g2_e    = GateExpr(g2, CloneExpr(*pool[bi].expr),
+                                                            make_inner(inner[ii]));
                                     auto wrapped = (wrap == 0)
                                         ? Expr::Negate(std::move(g2_e))
                                         : Expr::BitwiseNot(std::move(g2_e));
-                                    auto e       = GateExpr(
-                                        g1, CloneExpr(*pool[ai].expr), std::move(wrapped)
-                                    );
+                                    auto e       = GateExpr(g1, CloneExpr(*pool[ai].expr),
+                                                            std::move(wrapped));
                                     if (TryUpdate(best, std::move(e), eval, nv, bw, baseline)) {
                                         return best;
                                     }
@@ -905,32 +911,28 @@ namespace cobra {
                         // Mul scan: lifted = Mul(atom_B, inner_C)
                         {
                             for (size_t bi = 0; bi < pool_n; ++bi) {
+                                ::cobra::budget::Checkpoint();
                                 const bool filtered = CollectMulProbe0Candidates(
                                     inner_cache.mul_probe0_buckets, pool[bi].vals[0], lifted[0],
-                                    bw, mul_candidates
-                                );
+                                    bw, mul_candidates);
                                 if (filtered) {
                                     for (size_t ii_idx : mul_candidates) {
-                                        if (!MulMatches(
-                                                pool[bi].vals, inner[ii_idx].vals, lifted, mask,
-                                                1
-                                            ))
+                                        ::cobra::budget::Checkpoint();
+                                        if (!MulMatches(pool[bi].vals, inner[ii_idx].vals,
+                                                        lifted, mask, 1))
                                         {
                                             continue;
                                         }
-                                        auto g2_e = GateExpr(
-                                            Gate::kMul, CloneExpr(*pool[bi].expr),
-                                            make_inner(inner[ii_idx])
-                                        );
+                                        auto g2_e =
+                                            GateExpr(Gate::kMul, CloneExpr(*pool[bi].expr),
+                                                     make_inner(inner[ii_idx]));
                                         auto wrapped = (wrap == 0)
                                             ? Expr::Negate(std::move(g2_e))
                                             : Expr::BitwiseNot(std::move(g2_e));
-                                        auto e       = GateExpr(
-                                            g1, CloneExpr(*pool[ai].expr), std::move(wrapped)
-                                        );
-                                        if (TryUpdate(
-                                                best, std::move(e), eval, nv, bw, baseline
-                                            ))
+                                        auto e       = GateExpr(g1, CloneExpr(*pool[ai].expr),
+                                                                std::move(wrapped));
+                                        if (TryUpdate(best, std::move(e), eval, nv, bw,
+                                                      baseline))
                                         {
                                             return best;
                                         }
@@ -938,22 +940,19 @@ namespace cobra {
                                     continue;
                                 }
                                 for (size_t ii = 0; ii < inner_n; ++ii) {
-                                    if (!MulMatches(
-                                            pool[bi].vals, inner[ii].vals, lifted, mask
-                                        ))
+                                    ::cobra::budget::Checkpoint();
+                                    if (!MulMatches(pool[bi].vals, inner[ii].vals, lifted,
+                                                    mask))
                                     {
                                         continue;
                                     }
-                                    auto g2_e = GateExpr(
-                                        Gate::kMul, CloneExpr(*pool[bi].expr),
-                                        make_inner(inner[ii])
-                                    );
+                                    auto g2_e = GateExpr(Gate::kMul, CloneExpr(*pool[bi].expr),
+                                                         make_inner(inner[ii]));
                                     auto wrapped = (wrap == 0)
                                         ? Expr::Negate(std::move(g2_e))
                                         : Expr::BitwiseNot(std::move(g2_e));
-                                    auto e       = GateExpr(
-                                        g1, CloneExpr(*pool[ai].expr), std::move(wrapped)
-                                    );
+                                    auto e       = GateExpr(g1, CloneExpr(*pool[ai].expr),
+                                                            std::move(wrapped));
                                     if (TryUpdate(best, std::move(e), eval, nv, bw, baseline)) {
                                         return best;
                                     }
@@ -969,10 +968,10 @@ namespace cobra {
 
     } // namespace
 
-    SolverResult< SignaturePayload > TryTemplateDecomposition(
-        const SignatureContext &ctx, const Options &opts, uint32_t num_vars,
-        const ExprCost *baseline_cost
-    ) {
+    SolverResult< SignaturePayload > TryTemplateDecomposition(const SignatureContext &ctx,
+                                                              const Options &opts,
+                                                              uint32_t num_vars,
+                                                              const ExprCost *baseline_cost) {
         COBRA_TRACE("TemplateDecomp", "TryTemplateDecomposition: vars={}", num_vars);
         if (!ctx.eval) {
             ReasonDetail reason{
@@ -1020,18 +1019,25 @@ namespace cobra {
 
         // Generate reproducible probe points.
         std::mt19937_64 rng(0xC0B4A);
-        std::vector< std::vector< uint64_t > > pts(kNProbes);
+        cobra::BudgetVector< cobra::BudgetVector< uint64_t > > pts(kNProbes);
         for (auto &p : pts) {
+            ::cobra::budget::Checkpoint();
             p.resize(num_vars);
-            for (auto &v : p) { v = rng() & kMask; }
+            for (auto &v : p) {
+                ::cobra::budget::Checkpoint();
+                v = rng() & kMask;
+            }
         }
 
         // Evaluate target at probe points.
         ProbeVals target;
-        for (size_t i = 0; i < kNProbes; ++i) { target[i] = (*ctx.eval)(pts[i]); }
+        for (size_t i = 0; i < kNProbes; ++i) {
+            ::cobra::budget::Checkpoint();
+            target[i] = (*ctx.eval)(pts[i]);
+        }
 
         // Build atom pool.
-        std::vector< Atom > pool;
+        cobra::BudgetVector< Atom > pool;
         ValMap vmap;
         {
             COBRA_ZONE_N("TemplatePopulate");
@@ -1046,10 +1052,13 @@ namespace cobra {
         // FullWidthCheckEval-gated, so extra constants only widen the search.
         {
             uint64_t or_fold = 0;
-            for (size_t i = 0; i < kNProbes; ++i) { or_fold |= target[i]; }
+            for (size_t i = 0; i < kNProbes; ++i) {
+                ::cobra::budget::Checkpoint();
+                or_fold |= target[i];
+            }
             // Skip values already seeded: Push dedups the pool by probe-vals, so
             // re-seeding the same constant only wastes a Probe() call.
-            std::unordered_set< uint64_t > seeded_vals;
+            cobra::BudgetSet< uint64_t > seeded_vals;
             auto seed_const = [&](uint64_t c) {
                 if (c == 0 || !seeded_vals.insert(c).second) { return; }
                 auto e = Expr::Constant(c);
@@ -1059,6 +1068,7 @@ namespace cobra {
             seed_const(or_fold);
             uint32_t seeded = 0;
             for (size_t i = 0; i < kNProbes && seeded < 7; ++i) {
+                ::cobra::budget::Checkpoint();
                 if (target[i] != 0) {
                     seed_const(target[i]);
                     ++seeded;
@@ -1089,9 +1099,8 @@ namespace cobra {
         // Layer 1.
         {
             COBRA_ZONE_N("TemplateLayer1");
-            auto r1 = Layer1(
-                target, pool, vmap, kMask, *ctx.eval, num_vars, opts.bitwidth, baseline_cost
-            );
+            auto r1 = Layer1(target, pool, vmap, kMask, *ctx.eval, num_vars, opts.bitwidth,
+                             baseline_cost);
             if (r1.has_value()) {
                 return SolverResult< SignaturePayload >::Success(std::move(*r1));
             }
@@ -1103,9 +1112,8 @@ namespace cobra {
         {
             COBRA_ZONE_N("TemplateLayer2");
             auto inner = BuildInnerCompositions(pool, vmap, kMask);
-            auto r2    = Layer2(
-                target, pool, inner, kMask, *ctx.eval, num_vars, opts.bitwidth, baseline_cost
-            );
+            auto r2    = Layer2(target, pool, inner, kMask, *ctx.eval, num_vars, opts.bitwidth,
+                                baseline_cost);
             if (r2.has_value()) {
                 return SolverResult< SignaturePayload >::Success(std::move(*r2));
             }
@@ -1116,8 +1124,10 @@ namespace cobra {
         // against Layers 1 and 2.
         COBRA_ZONE_N("TemplateUnaryWrap");
         for (int wrap = 0; wrap < 2; ++wrap) {
+            ::cobra::budget::Checkpoint();
             ProbeVals lifted;
             for (size_t i = 0; i < kNProbes; ++i) {
+                ::cobra::budget::Checkpoint();
                 if (wrap == 0) {
                     lifted[i] = (-target[i]) & kMask; // Neg
                 } else {
@@ -1171,10 +1181,8 @@ namespace cobra {
         // Cost: O(pool^2 * 4) hash lookups — very fast.
         {
             COBRA_ZONE_N("TemplateLayer3");
-            auto r3 = Layer3(
-                target, pool, vmap, *inner_cache, kMask, *ctx.eval, num_vars, opts.bitwidth,
-                baseline_cost
-            );
+            auto r3 = Layer3(target, pool, vmap, *inner_cache, kMask, *ctx.eval, num_vars,
+                             opts.bitwidth, baseline_cost);
             if (r3.has_value()) {
                 return SolverResult< SignaturePayload >::Success(std::move(*r3));
             }
@@ -1184,10 +1192,8 @@ namespace cobra {
         // Unary-wrapped non-invertible gate scan for overlap patterns.
         {
             COBRA_ZONE_N("TemplateLayer4");
-            auto r4 = Layer4(
-                target, pool, vmap, *inner_cache, kMask, *ctx.eval, num_vars, opts.bitwidth,
-                baseline_cost
-            );
+            auto r4 = Layer4(target, pool, vmap, *inner_cache, kMask, *ctx.eval, num_vars,
+                             opts.bitwidth, baseline_cost);
             if (r4.has_value()) {
                 return SolverResult< SignaturePayload >::Success(std::move(*r4));
             }

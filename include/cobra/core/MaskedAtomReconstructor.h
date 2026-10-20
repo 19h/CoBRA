@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 #include "cobra/core/SemilinearIR.h"
@@ -7,8 +8,8 @@
 
 namespace cobra {
 
-    std::unique_ptr< Expr > ReconstructMaskedAtoms(
-        const SemilinearIR &ir, const std::vector< PartitionClass > &partitions
-    );
+    std::unique_ptr< Expr >
+    ReconstructMaskedAtoms(const SemilinearIR &ir,
+                           const cobra::BudgetVector< PartitionClass > &partitions);
 
 } // namespace cobra

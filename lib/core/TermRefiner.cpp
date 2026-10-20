@@ -1,5 +1,6 @@
 #include "cobra/core/TermRefiner.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/SemilinearIR.h"
 #include "cobra/core/Trace.h"
@@ -12,11 +13,11 @@
 
 namespace cobra {
 
-    bool CanChangeCoefficientTo(
-        uint64_t old_coeff, uint64_t new_coeff, uint64_t bitmask, uint32_t bitwidth
-    ) {
+    bool CanChangeCoefficientTo(uint64_t old_coeff, uint64_t new_coeff, uint64_t bitmask,
+                                uint32_t bitwidth) {
         const uint64_t kMod = Bitmask(bitwidth);
         for (uint32_t i = 0; i < bitwidth; ++i) {
+            ::cobra::budget::Checkpoint();
             const uint64_t kBit = 1ULL << i;
             if ((kMod & (old_coeff * (kBit & bitmask)))
                 != (kMod & (new_coeff * (kBit & bitmask))))
@@ -27,10 +28,11 @@ namespace cobra {
         return true;
     }
 
-    bool
-    CanChangeMaskTo(uint64_t coeff, uint64_t old_mask, uint64_t new_mask, uint32_t bitwidth) {
+    bool CanChangeMaskTo(uint64_t coeff, uint64_t old_mask, uint64_t new_mask,
+                         uint32_t bitwidth) {
         const uint64_t kMod = Bitmask(bitwidth);
         for (uint32_t i = 0; i < bitwidth; ++i) {
+            ::cobra::budget::Checkpoint();
             const uint64_t kBit = 1ULL << i;
             if ((kMod & (coeff * (kBit & old_mask))) != (kMod & (coeff * (kBit & new_mask)))) {
                 return false;
@@ -43,6 +45,7 @@ namespace cobra {
         const uint64_t kMod = Bitmask(bitwidth);
         uint64_t reduced    = 0;
         for (uint32_t i = 0; i < bitwidth; ++i) {
+            ::cobra::budget::Checkpoint();
             const uint64_t kBit = 1ULL << i;
             if ((mask & kBit) != 0 && (kMod & (coeff * kBit)) != 0) { reduced |= kBit; }
         }
@@ -62,17 +65,14 @@ namespace cobra {
 
         /// Create a masked atom: BitwiseAnd(basis, Constant(mask)).
         AtomId CreateMaskedAtom(SemilinearIR &ir, const Expr &basis, uint64_t mask) {
-            return CreateAtom(
-                ir, Expr::BitwiseAnd(CloneExpr(basis), Expr::Constant(mask)),
-                OperatorFamily::kAnd
-            );
+            return CreateAtom(ir, Expr::BitwiseAnd(CloneExpr(basis), Expr::Constant(mask)),
+                              OperatorFamily::kAnd);
         }
 
         /// Try to merge two disjoint-mask terms into one.
         /// Returns true if merge succeeded.
-        bool TryMergePair(
-            RefineTerm &a, RefineTerm &b, SemilinearIR &ir, const Expr &basis, uint64_t modmask
-        ) {
+        bool TryMergePair(RefineTerm &a, RefineTerm &b, SemilinearIR &ir, const Expr &basis,
+                          uint64_t modmask) {
             if (a.consumed || b.consumed) { return false; }
             if ((a.mask & b.mask) != 0) { return false; }
 
@@ -112,18 +112,19 @@ namespace cobra {
         /// If m1+m2=m3 with disjoint masks, rewrite 3 terms as 2:
         ///   m1*(c1&x) + m2*(c2&x) + m3*(c3&x)
         ///     → m1*((c1|c3)&x) + m2*((c2|c3)&x)
-        bool TryThreeTermCollapse(
-            std::vector< RefineTerm > &group, SemilinearIR &ir, const Expr &basis,
-            uint64_t modmask
-        ) {
+        bool TryThreeTermCollapse(cobra::BudgetVector< RefineTerm > &group, SemilinearIR &ir,
+                                  const Expr &basis, uint64_t modmask) {
             const uint64_t kMod = Bitmask(ir.bitwidth);
             bool changed        = false;
 
             for (size_t i = 0; i < group.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (group[i].consumed) { continue; }
                 for (size_t j = i + 1; j < group.size(); ++j) {
+                    ::cobra::budget::Checkpoint();
                     if (group[j].consumed) { continue; }
                     for (size_t k = j + 1; k < group.size(); ++k) {
+                        ::cobra::budget::Checkpoint();
                         if (group[k].consumed) { continue; }
 
                         // Try all orderings of (a, b, c) where a.coeff + b.coeff = c.coeff
@@ -161,14 +162,13 @@ namespace cobra {
         }
 
         /// Refine a single basis group (all terms share the same basis expression).
-        void RefineGroup(
-            std::vector< RefineTerm > &group, SemilinearIR &ir, const Expr &basis,
-            uint64_t modmask
-        ) {
+        void RefineGroup(cobra::BudgetVector< RefineTerm > &group, SemilinearIR &ir,
+                         const Expr &basis, uint64_t modmask) {
             const uint64_t kMod = Bitmask(ir.bitwidth);
 
             // Step 0: Reduce masks (strip coefficient-killed bits)
             for (auto &t : group) {
+                ::cobra::budget::Checkpoint();
                 if (t.consumed) { continue; }
                 const uint64_t kReduced = ReduceMask(t.coeff, t.mask, ir.bitwidth);
                 if (kReduced != t.mask) {
@@ -179,6 +179,7 @@ namespace cobra {
 
             // Step 3 (paper 5.2): Discard zero-effective terms
             for (auto &t : group) {
+                ::cobra::budget::Checkpoint();
                 if (t.consumed) { continue; }
                 if (CanChangeCoefficientTo(t.coeff, 0, t.mask, ir.bitwidth)) {
                     t.consumed = true;
@@ -188,10 +189,13 @@ namespace cobra {
             // Step 1: Merge disjoint-mask pairs with same coefficient
             bool merged = true;
             while (merged) {
+                ::cobra::budget::Checkpoint();
                 merged = false;
                 for (size_t i = 0; i < group.size(); ++i) {
+                    ::cobra::budget::Checkpoint();
                     if (group[i].consumed) { continue; }
                     for (size_t j = i + 1; j < group.size(); ++j) {
+                        ::cobra::budget::Checkpoint();
                         if (group[j].consumed) { continue; }
                         if (group[i].coeff == group[j].coeff
                             && (group[i].mask & group[j].mask) == 0)
@@ -208,8 +212,10 @@ namespace cobra {
 
             // Step 2: Change coefficients to match, then merge disjoint pairs
             for (size_t i = 0; i < group.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (group[i].consumed) { continue; }
                 for (size_t j = i + 1; j < group.size(); ++j) {
+                    ::cobra::budget::Checkpoint();
                     if (group[j].consumed) { continue; }
                     TryMergePair(group[i], group[j], ir, basis, modmask);
                 }
@@ -217,6 +223,7 @@ namespace cobra {
 
             // Step 4: Change coefficient to -1 where possible
             for (auto &t : group) {
+                ::cobra::budget::Checkpoint();
                 if (t.consumed) { continue; }
                 const uint64_t kNegOne = kMod; // -1 mod 2^bitwidth
                 if (t.coeff != kNegOne
@@ -228,8 +235,10 @@ namespace cobra {
 
             // Step 5: Repeat step 2 after coefficient normalization
             for (size_t i = 0; i < group.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (group[i].consumed) { continue; }
                 for (size_t j = i + 1; j < group.size(); ++j) {
+                    ::cobra::budget::Checkpoint();
                     if (group[j].consumed) { continue; }
                     TryMergePair(group[i], group[j], ir, basis, modmask);
                 }
@@ -254,41 +263,43 @@ namespace cobra {
             size_t original_index;
         };
 
-        std::unordered_map< uint64_t, std::vector< GroupEntry > > basis_groups;
-        std::vector< bool > in_group(ir.terms.size(), false);
+        cobra::BudgetMap< uint64_t, cobra::BudgetVector< GroupEntry > > basis_groups;
+        cobra::BudgetVector< bool > in_group(ir.terms.size(), false);
 
         // Map from basis_hash to a representative basis expression.
-        std::unordered_map< uint64_t, const Expr * > basis_repr;
+        cobra::BudgetMap< uint64_t, const Expr * > basis_repr;
 
         for (size_t i = 0; i < ir.terms.size(); ++i) {
+            ::cobra::budget::Checkpoint();
             const auto &term = ir.terms[i];
             auto decomp      = DecomposeAtom(ir.atom_table[term.atom_id], kMod);
             if (!decomp.valid) { continue; }
 
             in_group[i] = true;
             basis_repr.emplace(decomp.basis_hash, decomp.basis);
-            basis_groups[decomp.basis_hash].push_back(
-                {
-                    .term           = { .coeff   = term.coeff,
-                                       .mask    = decomp.mask,
-                                       .atom_id = term.atom_id },
-                    .original_index = i
-            }
-            );
+            basis_groups[decomp.basis_hash].push_back({
+                .term = { .coeff = term.coeff, .mask = decomp.mask, .atom_id = term.atom_id },
+                .original_index = i
+            });
         }
 
         bool any_refined = false;
         for (auto &[hash, entries] : basis_groups) {
+            ::cobra::budget::Checkpoint();
             const Expr *basis = basis_repr.at(hash);
-            std::vector< RefineTerm > group;
+            cobra::BudgetVector< RefineTerm > group;
             group.reserve(entries.size());
-            for (auto &e : entries) { group.push_back(e.term); }
+            for (auto &e : entries) {
+                ::cobra::budget::Checkpoint();
+                group.push_back(e.term);
+            }
 
             RefineGroup(group, ir, *basis, kMod);
 
             // Write back results
             bool group_changed = false;
             for (size_t gi = 0; gi < group.size(); ++gi) {
+                ::cobra::budget::Checkpoint();
                 const auto &orig = entries[gi].term;
                 const auto &ref  = group[gi];
                 if (ref.consumed || ref.coeff != orig.coeff || ref.mask != orig.mask
@@ -301,7 +312,10 @@ namespace cobra {
 
             if (group_changed) {
                 any_refined = true;
-                for (size_t gi = 0; gi < group.size(); ++gi) { entries[gi].term = group[gi]; }
+                for (size_t gi = 0; gi < group.size(); ++gi) {
+                    ::cobra::budget::Checkpoint();
+                    entries[gi].term = group[gi];
+                }
             }
         }
 
@@ -311,37 +325,40 @@ namespace cobra {
         }
 
         // Rebuild ir.terms from refined groups + non-group terms
-        std::vector< WeightedAtom > new_terms;
+        cobra::BudgetVector< WeightedAtom > new_terms;
 
         for (size_t i = 0; i < ir.terms.size(); ++i) {
+            ::cobra::budget::Checkpoint();
             if (!in_group[i]) { new_terms.push_back(ir.terms[i]); }
         }
 
         for (auto &[hash, entries] : basis_groups) {
+            ::cobra::budget::Checkpoint();
             for (const auto &e : entries) {
+                ::cobra::budget::Checkpoint();
                 if (e.term.consumed) { continue; }
                 if (e.term.coeff == 0) { continue; }
                 new_terms.push_back(
-                    { .coeff = e.term.coeff & kMod, .atom_id = e.term.atom_id }
-                );
+                    { .coeff = e.term.coeff & kMod, .atom_id = e.term.atom_id });
             }
         }
 
         // Re-merge any duplicate atom_ids
-        std::unordered_map< AtomId, uint64_t > merged;
+        cobra::BudgetMap< AtomId, uint64_t > merged;
         for (const auto &t : new_terms) {
+            ::cobra::budget::Checkpoint();
             merged[t.atom_id] = (merged[t.atom_id] + t.coeff) & kMod;
         }
 
         ir.terms.clear();
         for (const auto &[aid, coeff] : merged) {
+            ::cobra::budget::Checkpoint();
             if (coeff != 0) { ir.terms.push_back({ .coeff = coeff, .atom_id = aid }); }
         }
 
         std::sort(
             ir.terms.begin(), ir.terms.end(),
-            [](const WeightedAtom &a, const WeightedAtom &b) { return a.atom_id < b.atom_id; }
-        );
+            [](const WeightedAtom &a, const WeightedAtom &b) { return a.atom_id < b.atom_id; });
 
         COBRA_TRACE("TermRefiner", "RefineTerms: refined to {} terms", ir.terms.size());
     }

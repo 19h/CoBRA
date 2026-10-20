@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "Orchestrator.h"
 #include "cobra/core/Result.h"
@@ -60,10 +61,8 @@ namespace cobra {
         kCount_,
     };
 
-    static_assert(
-        static_cast< uint8_t >(PassId::kCount_) <= 64,
-        "PassId count exceeds attempted_mask width (uint64_t)"
-    );
+    static_assert(static_cast< uint8_t >(PassId::kCount_) <= 64,
+                  "PassId count exceeds attempted_mask width (uint64_t)");
 
     inline bool IsDecompositionFamilyPass(PassId id) {
         return id >= PassId::kExtractProductCore && id <= PassId::kResidualTemplate;
@@ -122,7 +121,7 @@ namespace cobra {
     // Registry
     // ---------------------------------------------------------------
 
-    const std::vector< PassDescriptor > &GetPassRegistry();
+    const cobra::BudgetVector< PassDescriptor > &GetPassRegistry();
 
     // ---------------------------------------------------------------
     // Pass adapter declarations
@@ -142,13 +141,13 @@ namespace cobra {
     // ActiveAst helpers — resolve vars/evaluator/sig from solve_ctx
     // ---------------------------------------------------------------
 
-    const std::vector< std::string > &
-    ActiveAstVars(const WorkItem &item, const OrchestratorContext &ctx);
+    const cobra::BudgetVector< std::string > &ActiveAstVars(const WorkItem &item,
+                                                            const OrchestratorContext &ctx);
 
-    const std::optional< Evaluator > &
-    ActiveAstEvaluator(const WorkItem &item, const OrchestratorContext &ctx);
+    const std::optional< Evaluator > &ActiveAstEvaluator(const WorkItem &item,
+                                                         const OrchestratorContext &ctx);
 
-    const std::vector< uint64_t > *
-    ActiveAstInputSig(const WorkItem &item, const OrchestratorContext &ctx);
+    const cobra::BudgetVector< uint64_t > *ActiveAstInputSig(const WorkItem &item,
+                                                             const OrchestratorContext &ctx);
 
 } // namespace cobra

@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/PolyIR.h"
 #include <cstdint>
@@ -20,8 +21,7 @@ namespace cobra {
 
     // Generate count equivalent variants of seed, each with
     // independent null-polynomial injection.
-    std::vector< PolyIR > GenerateEquivalentVariants(
-        const PolyIR &seed, uint32_t count, const NullPolyConfig &config
-    );
+    cobra::BudgetVector< PolyIR > GenerateEquivalentVariants(const PolyIR &seed, uint32_t count,
+                                                             const NullPolyConfig &config);
 
 } // namespace cobra

@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 #include "cobra/core/PassContract.h"
@@ -20,7 +21,7 @@ namespace cobra {
     struct GhostSolveResult
     {
         std::unique_ptr< Expr > expr;
-        std::vector< const char * > primitives_used;
+        cobra::BudgetVector< const char * > primitives_used;
         uint8_t num_terms = 0;
     };
 
@@ -29,18 +30,18 @@ namespace cobra {
     // support: full-width live-variable indices in original space.
     // Probes are generated in support-local space and mapped to full
     // space via support[], so late-index variables are correctly tested.
-    bool IsBooleanNullResidual(
-        const Evaluator &residual_eval, const std::vector< uint32_t > &support,
-        uint32_t num_vars, uint32_t bitwidth, const std::vector< uint64_t > &boolean_sig
-    );
+    bool IsBooleanNullResidual(const Evaluator &residual_eval,
+                               const cobra::BudgetVector< uint32_t > &support,
+                               uint32_t num_vars, uint32_t bitwidth,
+                               const cobra::BudgetVector< uint64_t > &boolean_sig);
 
     // Attempts to solve a boolean-null residual as a constant-coefficient
     // single ghost primitive. Returns expression in original variable space.
     // Requires support.size() <= kMaxResidualSupport.
-    SolverResult< GhostSolveResult > SolveGhostResidual(
-        const Evaluator &residual_eval, const std::vector< uint32_t > &support,
-        uint32_t num_vars, uint32_t bitwidth
-    );
+    SolverResult< GhostSolveResult >
+    SolveGhostResidual(const Evaluator &residual_eval,
+                       const cobra::BudgetVector< uint32_t > &support, uint32_t num_vars,
+                       uint32_t bitwidth);
 
     // Attempts to solve a boolean-null residual as q(x) * g(tuple),
     // where q is a constant polynomial and g is a ghost primitive.
@@ -48,8 +49,7 @@ namespace cobra {
     // Enumerates ghost primitives in priority order (mul_sub_and first).
     // Requires support.size() <= kMaxResidualSupport.
     SolverResult< GhostSolveResult > SolveFactoredGhostResidual(
-        const Evaluator &residual_eval, const std::vector< uint32_t > &support,
-        uint32_t num_vars, uint32_t bitwidth, uint8_t max_degree = 0, uint8_t grid_degree = 2
-    );
+        const Evaluator &residual_eval, const cobra::BudgetVector< uint32_t > &support,
+        uint32_t num_vars, uint32_t bitwidth, uint8_t max_degree = 0, uint8_t grid_degree = 2);
 
 } // namespace cobra

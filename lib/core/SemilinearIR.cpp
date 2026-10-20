@@ -1,5 +1,6 @@
 #include "cobra/core/SemilinearIR.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/ExprUtils.h"
 #include <algorithm>
@@ -12,8 +13,14 @@
 size_t std::hash< cobra::AtomKey >::operator()(const cobra::AtomKey &k) const {
     using cobra::detail::hash_combine;
     size_t h = std::hash< size_t >{}(k.support.size());
-    for (auto v : k.support) { h = hash_combine(h, std::hash< uint32_t >{}(v)); }
-    for (auto t : k.truth_table) { h = hash_combine(h, std::hash< uint64_t >{}(t)); }
+    for (auto v : k.support) {
+        ::cobra::budget::Checkpoint();
+        h = hash_combine(h, std::hash< uint32_t >{}(v));
+    }
+    for (auto t : k.truth_table) {
+        ::cobra::budget::Checkpoint();
+        h = hash_combine(h, std::hash< uint64_t >{}(t));
+    }
     return h;
 }
 
@@ -21,15 +28,14 @@ namespace cobra {
 
     namespace {
 
-        uint64_t EvalExprBool(
-            const Expr &e, const std::vector< GlobalVarIdx > &support, uint64_t assignment,
-            uint64_t mask
-        ) {
+        uint64_t EvalExprBool(const Expr &e, const cobra::BudgetVector< GlobalVarIdx > &support,
+                              uint64_t assignment, uint64_t mask) {
             switch (e.kind) {
                 case Expr::Kind::kConstant:
                     return e.constant_val & mask;
                 case Expr::Kind::kVariable: {
                     for (size_t i = 0; i < support.size(); ++i) {
+                        ::cobra::budget::Checkpoint();
                         if (support[i] == e.var_index) { return (assignment >> i) & 1; }
                     }
                     return 0;
@@ -60,15 +66,18 @@ namespace cobra {
 
     } // namespace
 
-    std::vector< uint64_t > ComputeAtomTruthTable(
-        const Expr &atom, const std::vector< GlobalVarIdx > &support, uint32_t bitwidth
-    ) {
+    cobra::BudgetVector< uint64_t >
+    ComputeAtomTruthTable(const Expr &atom, const cobra::BudgetVector< GlobalVarIdx > &support,
+                          uint32_t bitwidth) {
         const size_t kN = support.size();
         if (kN > 5) { return {}; }
         const size_t kLen    = size_t{ 1 } << kN;
         const uint64_t kMask = Bitmask(bitwidth);
-        std::vector< uint64_t > tt(kLen);
-        for (size_t i = 0; i < kLen; ++i) { tt[i] = EvalExprBool(atom, support, i, kMask); }
+        cobra::BudgetVector< uint64_t > tt(kLen);
+        for (size_t i = 0; i < kLen; ++i) {
+            ::cobra::budget::Checkpoint();
+            tt[i] = EvalExprBool(atom, support, i, kMask);
+        }
         return tt;
     }
 
@@ -80,6 +89,7 @@ namespace cobra {
             h ^= (expr.var_index + 1) * 0x517CC1B727220A95ULL;
         }
         for (const auto &child : expr.children) {
+            ::cobra::budget::Checkpoint();
             const uint64_t kCh  = StructuralHash(*child);
             h                  ^= kCh + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
         }
@@ -117,9 +127,9 @@ namespace cobra {
         return {};
     }
 
-    AtomId
-    CreateAtom(SemilinearIR &ir, std::unique_ptr< Expr > subtree, OperatorFamily provenance) {
-        std::vector< GlobalVarIdx > support;
+    AtomId CreateAtom(SemilinearIR &ir, std::unique_ptr< Expr > subtree,
+                      OperatorFamily provenance) {
+        cobra::BudgetVector< GlobalVarIdx > support;
         CollectVariables(*subtree, support);
         std::sort(support.begin(), support.end());
         support.erase(std::unique(support.begin(), support.end()), support.end());
@@ -139,19 +149,26 @@ namespace cobra {
 
     void CompactAtomTable(SemilinearIR &ir) {
         // Collect live atom IDs referenced by terms.
-        std::vector< bool > live(ir.atom_table.size(), false);
-        for (const auto &term : ir.terms) { live[term.atom_id] = true; }
+        cobra::BudgetVector< bool > live(ir.atom_table.size(), false);
+        for (const auto &term : ir.terms) {
+            ::cobra::budget::Checkpoint();
+            live[term.atom_id] = true;
+        }
 
         // Count live atoms; bail if all are live (nothing to compact).
         size_t live_count = 0;
-        for (bool b : live) { live_count += b ? 1 : 0; }
+        for (bool b : live) {
+            ::cobra::budget::Checkpoint();
+            live_count += b ? 1 : 0;
+        }
         if (live_count == ir.atom_table.size()) { return; }
 
         // Build old→new ID mapping and compact the table.
-        std::vector< AtomId > remap(ir.atom_table.size(), 0);
-        std::vector< AtomInfo > compacted;
+        cobra::BudgetVector< AtomId > remap(ir.atom_table.size(), 0);
+        cobra::BudgetVector< AtomInfo > compacted;
         compacted.reserve(live_count);
         for (size_t i = 0; i < ir.atom_table.size(); ++i) {
+            ::cobra::budget::Checkpoint();
             if (!live[i]) { continue; }
             remap[i]                 = static_cast< AtomId >(compacted.size());
             ir.atom_table[i].atom_id = remap[i];
@@ -159,7 +176,10 @@ namespace cobra {
         }
 
         ir.atom_table = std::move(compacted);
-        for (auto &term : ir.terms) { term.atom_id = remap[term.atom_id]; }
+        for (auto &term : ir.terms) {
+            ::cobra::budget::Checkpoint();
+            term.atom_id = remap[term.atom_id];
+        }
     }
 
 } // namespace cobra

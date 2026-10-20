@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Classification.h"
 #include "cobra/core/Expr.h"
@@ -21,7 +22,7 @@ namespace cobra {
         std::string reason;
 
         std::optional< ReasonCode > reason_code;
-        std::vector< ReasonFrame > cause_chain;
+        cobra::BudgetVector< ReasonFrame > cause_chain;
     };
 
     struct SimplifyTelemetry
@@ -38,8 +39,8 @@ namespace cobra {
 
         Kind kind = Kind::kSimplified;
         std::unique_ptr< Expr > expr;
-        std::vector< uint64_t > sig_vector;
-        std::vector< std::string > real_vars;
+        cobra::BudgetVector< uint64_t > sig_vector;
+        cobra::BudgetVector< std::string > real_vars;
         bool verified = false;
         Diagnostic diag;
         SimplifyTelemetry telemetry;

@@ -2,6 +2,7 @@
 #include "DecompositionPassHelpers.h"
 #include "cobra/core/AuxVarEliminator.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/ExprUtils.h"
 #include "cobra/core/GhostResidualSolver.h"
 #include "cobra/core/MultivarPolyRecovery.h"
@@ -23,14 +24,10 @@ namespace cobra {
     // DecompositionMeta stores enum values as uint8_t to avoid pulling
     // DecompositionEngine.h types into PassContract.h. Guard against
     // enum growth silently overflowing the uint8_t storage.
-    static_assert(
-        static_cast< int >(ExtractorKind::kBooleanNullDirect) <= 255,
-        "ExtractorKind exceeds uint8_t range in DecompositionMeta"
-    );
-    static_assert(
-        static_cast< int >(ResidualSolverKind::kTemplateDecomposition) <= 255,
-        "ResidualSolverKind exceeds uint8_t range in DecompositionMeta"
-    );
+    static_assert(static_cast< int >(ExtractorKind::kBooleanNullDirect) <= 255,
+                  "ExtractorKind exceeds uint8_t range in DecompositionMeta");
+    static_assert(static_cast< int >(ResidualSolverKind::kTemplateDecomposition) <= 255,
+                  "ResidualSolverKind exceeds uint8_t range in DecompositionMeta");
 
     namespace {
 
@@ -60,10 +57,8 @@ namespace cobra {
             return false;
         }
 
-        void SplitAddTree(
-            const Expr &e, std::vector< const Expr * > &products,
-            std::vector< std::unique_ptr< Expr > > &residual
-        ) {
+        void SplitAddTree(const Expr &e, cobra::BudgetVector< const Expr * > &products,
+                          cobra::BudgetVector< std::unique_ptr< Expr > > &residual) {
             if (e.kind == Expr::Kind::kAdd && e.children.size() == 2) {
                 SplitAddTree(*e.children[0], products, residual);
                 const Expr &rhs = *e.children[1];
@@ -83,17 +78,16 @@ namespace cobra {
 
     } // namespace
 
-    Evaluator
-    BuildRemainderEvaluator(const Evaluator &original, const Expr &core, uint32_t bitwidth) {
+    Evaluator BuildRemainderEvaluator(const Evaluator &original, const Expr &core,
+                                      uint32_t bitwidth) {
         // Mirror Simplify's public-API guard. The orchestrator already
         // rejects bitwidth ∉ [1, 64] before any decomposition pass runs;
         // this assert protects callers that bypass Simplify (tests,
         // direct DecompositionContext construction).
-        assert(
-            bitwidth >= 1 && bitwidth <= 64
-            && "BuildRemainderEvaluator: bitwidth must be in [1, 64]"
-        );
-        auto compiled_core   = std::make_shared< CompiledExpr >(CompileExpr(core, bitwidth));
+        assert(bitwidth >= 1 && bitwidth <= 64
+               && "BuildRemainderEvaluator: bitwidth must be in [1, 64]");
+        auto compiled_core = std::allocate_shared< CompiledExpr >(
+            budget::Allocator< CompiledExpr >{}, CompileExpr(core, bitwidth));
         const uint64_t kMask = Bitmask(bitwidth);
         // The returned closure captures `original_workspace` and `core_stack`
         // as mutable buffers reused across invocations. Concurrent calls on
@@ -102,17 +96,16 @@ namespace cobra {
         // per-thread use; lambda capture-by-value duplicates the workspaces.
         return Evaluator(
             [original, compiled_core = std::move(compiled_core), kMask,
-             original_workspace = EvaluatorWorkspace{}, core_stack = std::vector< uint64_t >{}](
-                const std::vector< uint64_t > &v
-            ) mutable -> uint64_t {
+             original_workspace = EvaluatorWorkspace{},
+             core_stack         = cobra::BudgetVector< uint64_t >{}](
+                const cobra::BudgetVector< uint64_t > &v) mutable -> uint64_t {
                 const uint64_t kF = original.HasCompiledExpr()
                     ? original.EvaluateWithWorkspace(v, original_workspace)
                     : original(v);
                 const uint64_t kP = EvalCompiledExpr(*compiled_core, v, core_stack);
                 return (kF - kP) & kMask;
             },
-            EvaluatorTraceKind::kRemainder
-        );
+            EvaluatorTraceKind::kRemainder);
     }
 
     // Extracts product addends from the AST and assembles them into a
@@ -127,32 +120,28 @@ namespace cobra {
     SolverResult< CoreCandidate > ExtractProductCore(const DecompositionContext &ctx) {
         COBRA_ZONE_N("ExtractProductCore");
         if (ctx.current_expr == nullptr) {
-            return SolverResult< CoreCandidate >::Inapplicable(
-                ReasonDetail{
-                    .top = { .code = { ReasonCategory::kGuardFailed,
-                                       ReasonDomain::kDecomposition, decomposition::kNoExpr },
-                            .message = "no expression provided" }
-            }
-            );
+            return SolverResult< CoreCandidate >::Inapplicable(ReasonDetail{
+                .top = { .code = { ReasonCategory::kGuardFailed, ReasonDomain::kDecomposition,
+                                   decomposition::kNoExpr },
+                        .message = "no expression provided" }
+            });
         }
 
-        std::vector< const Expr * > products;
-        std::vector< std::unique_ptr< Expr > > residual;
+        cobra::BudgetVector< const Expr * > products;
+        cobra::BudgetVector< std::unique_ptr< Expr > > residual;
         SplitAddTree(*ctx.current_expr, products, residual);
 
         if (products.empty()) {
-            return SolverResult< CoreCandidate >::Blocked(
-                ReasonDetail{
-                    .top = { .code    = { ReasonCategory::kSearchExhausted,
-                                          ReasonDomain::kDecomposition,
-                                          decomposition::kNoProducts },
-                            .message = "no product terms found in AST" }
-            }
-            );
+            return SolverResult< CoreCandidate >::Blocked(ReasonDetail{
+                .top = { .code = { ReasonCategory::kSearchExhausted,
+                                   ReasonDomain::kDecomposition, decomposition::kNoProducts },
+                        .message = "no product terms found in AST" }
+            });
         }
 
         auto core_expr = CloneExpr(*products[0]);
         for (size_t i = 1; i < products.size(); ++i) {
+            ::cobra::budget::Checkpoint();
             core_expr = Expr::Add(std::move(core_expr), CloneExpr(*products[i]));
         }
 
@@ -184,9 +173,13 @@ namespace cobra {
         bool all_same_as_orig = true;
         bool all_zero         = true;
         constexpr int kProbes = 5;
-        std::vector< uint64_t > point(kNv);
+        cobra::BudgetVector< uint64_t > point(kNv);
         for (int p = 0; p < kProbes; ++p) {
-            for (uint32_t i = 0; i < kNv; ++i) { point[i] = rng() & kMask; }
+            ::cobra::budget::Checkpoint();
+            for (uint32_t i = 0; i < kNv; ++i) {
+                ::cobra::budget::Checkpoint();
+                point[i] = rng() & kMask;
+            }
             const uint64_t kOrig = ctx.opts.evaluator(point) & kMask;
             const uint64_t kRes  = residual_eval(point);
             if (kRes != kOrig) { all_same_as_orig = false; }
@@ -206,18 +199,15 @@ namespace cobra {
         return true;
     }
 
-    SolverResult< CoreCandidate >
-    ExtractPolyCore(const DecompositionContext &ctx, uint8_t degree) {
+    SolverResult< CoreCandidate > ExtractPolyCore(const DecompositionContext &ctx,
+                                                  uint8_t degree) {
         COBRA_ZONE_N("ExtractPolyCore");
         if (!ctx.opts.evaluator) {
-            return SolverResult< CoreCandidate >::Inapplicable(
-                ReasonDetail{
-                    .top = { .code    = { ReasonCategory::kGuardFailed,
-                                          ReasonDomain::kDecomposition,
-                                          decomposition::kNoEvaluator },
-                            .message = "polynomial extraction requires evaluator" }
-            }
-            );
+            return SolverResult< CoreCandidate >::Inapplicable(ReasonDetail{
+                .top = { .code = { ReasonCategory::kGuardFailed, ReasonDomain::kDecomposition,
+                                   decomposition::kNoEvaluator },
+                        .message = "polynomial extraction requires evaluator" }
+            });
         }
 
         const auto kNv     = static_cast< uint32_t >(ctx.vars.size());
@@ -228,40 +218,33 @@ namespace cobra {
         const auto kRealCount = static_cast< uint32_t >(fw_elim.real_vars.size());
 
         if (kRealCount > kMaxResidualSupport) {
-            return SolverResult< CoreCandidate >::Inapplicable(
-                ReasonDetail{
-                    .top = { .code    = { ReasonCategory::kGuardFailed,
-                                          ReasonDomain::kDecomposition,
-                                          decomposition::kTooManyVars },
-                            .message = "too many real variables for polynomial extraction" }
-            }
-            );
+            return SolverResult< CoreCandidate >::Inapplicable(ReasonDetail{
+                .top = { .code = { ReasonCategory::kGuardFailed, ReasonDomain::kDecomposition,
+                                   decomposition::kTooManyVars },
+                        .message = "too many real variables for polynomial extraction" }
+            });
         }
 
         auto support = BuildVarSupport(ctx.vars, fw_elim.real_vars);
 
         auto poly = RecoverMultivarPoly(ctx.opts.evaluator, support, kNv, kBw, degree);
         if (!poly.Succeeded()) {
-            return SolverResult< CoreCandidate >::Blocked(
-                ReasonDetail{
-                    .top = { .code    = { ReasonCategory::kSearchExhausted,
-                                          ReasonDomain::kDecomposition,
-                                          decomposition::kPolyRecovFailed },
-                            .message = "polynomial recovery failed" }
-            }
-            );
+            return SolverResult< CoreCandidate >::Blocked(ReasonDetail{
+                .top = { .code    = { ReasonCategory::kSearchExhausted,
+                                      ReasonDomain::kDecomposition,
+                                      decomposition::kPolyRecovFailed },
+                        .message = "polynomial recovery failed" }
+            });
         }
 
         auto expr = BuildPolyExpr(poly.TakePayload());
         if (!expr.has_value()) {
-            return SolverResult< CoreCandidate >::Blocked(
-                ReasonDetail{
-                    .top = { .code    = { ReasonCategory::kSearchExhausted,
-                                          ReasonDomain::kDecomposition,
-                                          decomposition::kExprBuildFailed },
-                            .message = "expression build from polynomial failed" }
-            }
-            );
+            return SolverResult< CoreCandidate >::Blocked(ReasonDetail{
+                .top = { .code    = { ReasonCategory::kSearchExhausted,
+                                      ReasonDomain::kDecomposition,
+                                      decomposition::kExprBuildFailed },
+                        .message = "expression build from polynomial failed" }
+            });
         }
 
         CoreCandidate core;
@@ -274,14 +257,11 @@ namespace cobra {
     SolverResult< CoreCandidate > ExtractTemplateCore(const DecompositionContext &ctx) {
         COBRA_ZONE_N("ExtractTemplateCore");
         if (!ctx.opts.evaluator) {
-            return SolverResult< CoreCandidate >::Inapplicable(
-                ReasonDetail{
-                    .top = { .code    = { ReasonCategory::kGuardFailed,
-                                          ReasonDomain::kDecomposition,
-                                          decomposition::kNoEvaluator },
-                            .message = "template extraction requires evaluator" }
-            }
-            );
+            return SolverResult< CoreCandidate >::Inapplicable(ReasonDetail{
+                .top = { .code = { ReasonCategory::kGuardFailed, ReasonDomain::kDecomposition,
+                                   decomposition::kNoEvaluator },
+                        .message = "template extraction requires evaluator" }
+            });
         }
 
         const auto kNv     = static_cast< uint32_t >(ctx.vars.size());
@@ -301,13 +281,19 @@ namespace cobra {
             if (elim.real_vars.size() == ctx.vars.size()) {
                 sig_ctx.eval = ctx.opts.evaluator;
             } else {
-                sig_ctx.eval = [eval = ctx.opts.evaluator, idx = sig_ctx.original_indices,
-                                full = std::vector< uint64_t >(ctx.vars.size(), 0)](
-                                   const std::vector< uint64_t > &rv
-                               ) mutable -> uint64_t {
-                    for (size_t i = 0; i < idx.size(); ++i) { full[idx[i]] = rv[i]; }
+                sig_ctx.eval =
+                    [eval = ctx.opts.evaluator, idx = sig_ctx.original_indices,
+                     full = cobra::BudgetVector< uint64_t >(ctx.vars.size(), 0)](
+                        const cobra::BudgetVector< uint64_t > &rv) mutable -> uint64_t {
+                    for (size_t i = 0; i < idx.size(); ++i) {
+                        ::cobra::budget::Checkpoint();
+                        full[idx[i]] = rv[i];
+                    }
                     uint64_t result = eval(full);
-                    for (size_t i = 0; i < idx.size(); ++i) { full[idx[i]] = 0; }
+                    for (size_t i = 0; i < idx.size(); ++i) {
+                        ::cobra::budget::Checkpoint();
+                        full[idx[i]] = 0;
+                    }
                     return result;
                 };
             }
@@ -346,14 +332,11 @@ namespace cobra {
             }
         }
 
-        return SolverResult< CoreCandidate >::Blocked(
-            ReasonDetail{
-                .top = { .code    = { ReasonCategory::kSearchExhausted,
-                                      ReasonDomain::kDecomposition,
-                                      decomposition::kNoTemplateMatch },
-                        .message = "no template match found" }
-        }
-        );
+        return SolverResult< CoreCandidate >::Blocked(ReasonDetail{
+            .top = { .code = { ReasonCategory::kSearchExhausted, ReasonDomain::kDecomposition,
+                               decomposition::kNoTemplateMatch },
+                    .message = "no template match found" }
+        });
     }
 
 } // namespace cobra

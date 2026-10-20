@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 #include "cobra/core/PackedAnf.h"
@@ -11,8 +12,8 @@ namespace cobra {
     struct AnfForm
     {
         uint8_t constant_bit = 0;
-        std::vector< uint32_t > monomials; // nonzero masks, sorted by
-                                           // degree then value
+        cobra::BudgetVector< uint32_t > monomials; // nonzero masks, sorted by
+                                                   // degree then value
         uint32_t num_vars = 0;
 
         static AnfForm FromAnfCoeffs(const PackedAnf &anf, uint32_t num_vars);

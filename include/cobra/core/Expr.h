@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include <cstdint>
 #include <functional>
@@ -23,34 +24,37 @@ namespace cobra {
             kShr,
         };
 
+        static void *operator new(size_t bytes) { return budget::AllocateObject(bytes); }
+
+        static void operator delete(void *pointer) noexcept { budget::FreeObject(pointer); }
+
         Kind kind;
         uint64_t constant_val = 0;
         uint32_t var_index    = 0;
-        std::vector< std::unique_ptr< Expr > > children; // move-only by design
+        cobra::BudgetVector< std::unique_ptr< Expr > > children; // move-only by design
 
         static std::unique_ptr< Expr > Constant(uint64_t val);
         static std::unique_ptr< Expr > Variable(uint32_t index);
-        static std::unique_ptr< Expr >
-        Add(std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs);
-        static std::unique_ptr< Expr >
-        Mul(std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs);
-        static std::unique_ptr< Expr >
-        BitwiseAnd(std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs);
-        static std::unique_ptr< Expr >
-        BitwiseOr(std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs);
-        static std::unique_ptr< Expr >
-        BitwiseXor(std::unique_ptr< Expr > lhs, std::unique_ptr< Expr > rhs);
+        static std::unique_ptr< Expr > Add(std::unique_ptr< Expr > lhs,
+                                           std::unique_ptr< Expr > rhs);
+        static std::unique_ptr< Expr > Mul(std::unique_ptr< Expr > lhs,
+                                           std::unique_ptr< Expr > rhs);
+        static std::unique_ptr< Expr > BitwiseAnd(std::unique_ptr< Expr > lhs,
+                                                  std::unique_ptr< Expr > rhs);
+        static std::unique_ptr< Expr > BitwiseOr(std::unique_ptr< Expr > lhs,
+                                                 std::unique_ptr< Expr > rhs);
+        static std::unique_ptr< Expr > BitwiseXor(std::unique_ptr< Expr > lhs,
+                                                  std::unique_ptr< Expr > rhs);
         static std::unique_ptr< Expr > BitwiseNot(std::unique_ptr< Expr > operand);
         static std::unique_ptr< Expr > Negate(std::unique_ptr< Expr > operand);
-        static std::unique_ptr< Expr >
-        LogicalShr(std::unique_ptr< Expr > operand, uint64_t amount);
+        static std::unique_ptr< Expr > LogicalShr(std::unique_ptr< Expr > operand,
+                                                  uint64_t amount);
     };
 
     std::unique_ptr< Expr > CloneExpr(const Expr &expr);
 
-    std::string Render(
-        const Expr &expr, const std::vector< std::string > &var_names, uint32_t bitwidth = 64
-    );
+    std::string Render(const Expr &expr, const cobra::BudgetVector< std::string > &var_names,
+                       uint32_t bitwidth = 64);
 
 } // namespace cobra
 
@@ -64,10 +68,12 @@ template<>
 struct std::hash< cobra::Expr >
 {
     size_t operator()(const cobra::Expr &e) const {
+        cobra::budget::Checkpoint();
         size_t h = std::hash< int >{}(static_cast< int >(e.kind));
         h        = cobra::detail::hash_combine(h, std::hash< uint64_t >{}(e.constant_val));
         h        = cobra::detail::hash_combine(h, std::hash< uint32_t >{}(e.var_index));
         for (const auto &child : e.children) {
+            ::cobra::budget::Checkpoint();
             h = cobra::detail::hash_combine(h, std::hash< cobra::Expr >{}(*child));
         }
         return h;

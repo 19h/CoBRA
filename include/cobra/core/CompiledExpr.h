@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 
@@ -20,14 +21,13 @@ namespace cobra {
         uint64_t mask     = 0;
         uint32_t arity    = 0;
         size_t stack_size = 1;
-        std::vector< EvalInstr > program;
+        cobra::BudgetVector< EvalInstr > program;
     };
 
     CompiledExpr CompileExpr(const Expr &expr, uint32_t bitwidth);
 
-    uint64_t EvalCompiledExpr(
-        const CompiledExpr &compiled, const std::vector< uint64_t > &var_values,
-        std::vector< uint64_t > &stack
-    );
+    uint64_t EvalCompiledExpr(const CompiledExpr &compiled,
+                              const cobra::BudgetVector< uint64_t > &var_values,
+                              cobra::BudgetVector< uint64_t > &stack);
 
 } // namespace cobra

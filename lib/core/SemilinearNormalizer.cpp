@@ -1,5 +1,6 @@
 #include "cobra/core/SemilinearNormalizer.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/ExprUtils.h"
 #include "cobra/core/Result.h"
@@ -40,9 +41,8 @@ namespace cobra {
 
         bool HasVariable(const Expr &expr) {
             if (expr.kind == Expr::Kind::kVariable) { return true; }
-            return std::ranges::any_of(expr.children, [](const auto &child) {
-                return HasVariable(*child);
-            });
+            return std::ranges::any_of(expr.children,
+                                       [](const auto &child) { return HasVariable(*child); });
         }
 
         uint64_t EvalConstantBitwise(const Expr &expr, uint64_t mask) {
@@ -111,9 +111,8 @@ namespace cobra {
 
         bool HasConstant(const Expr &expr) {
             if (expr.kind == Expr::Kind::kConstant) { return true; }
-            return std::ranges::any_of(expr.children, [](const auto &child) {
-                return HasConstant(*child);
-            });
+            return std::ranges::any_of(expr.children,
+                                       [](const auto &child) { return HasConstant(*child); });
         }
 
         OperatorFamily DetectProvenance(const Expr &expr) {
@@ -166,20 +165,20 @@ namespace cobra {
         {
             uint32_t bitwidth{};
             uint64_t mask{};
-            std::unordered_map< AtomKey, AtomId > atom_map;
-            std::vector< AtomInfo > atom_table;
-            std::unordered_map< uint64_t, AtomId > hash_cache;
+            cobra::BudgetMap< AtomKey, AtomId > atom_map;
+            cobra::BudgetVector< AtomInfo > atom_table;
+            cobra::BudgetMap< uint64_t, AtomId > hash_cache;
             bool encountered_nonlinear = false;
         };
 
         struct CollectResult
         {
             uint64_t constant;
-            std::vector< WeightedAtom > terms;
+            cobra::BudgetVector< WeightedAtom > terms;
         };
 
         AtomId RegisterAtom(CollectCtx &ctx, const Expr &expr) {
-            std::vector< GlobalVarIdx > support;
+            cobra::BudgetVector< GlobalVarIdx > support;
             CollectVariables(expr, support);
             std::sort(support.begin(), support.end());
             support.erase(std::unique(support.begin(), support.end()), support.end());
@@ -225,7 +224,9 @@ namespace cobra {
 
         CollectResult CollectTerms(CollectCtx &ctx, const Expr &expr, uint64_t coeff) {
             coeff &= ctx.mask;
-            if (coeff == 0) { return { .constant = 0, .terms = {} }; }
+            if (coeff == 0) {
+                return { .constant = 0, .terms = {} };
+            }
 
             // Lower XOR/OR with a constant operand to AND-basis:
             //   a ^ c  =  a + c - 2*(a & c)
@@ -259,9 +260,8 @@ namespace cobra {
                     auto and_result    = CollectTerms(ctx, *and_expr, and_coeff);
                     var_result.constant =
                         (var_result.constant + and_result.constant) & ctx.mask;
-                    var_result.terms.insert(
-                        var_result.terms.end(), and_result.terms.begin(), and_result.terms.end()
-                    );
+                    var_result.terms.insert(var_result.terms.end(), and_result.terms.begin(),
+                                            and_result.terms.end());
 
                     return var_result;
                 }
@@ -270,6 +270,7 @@ namespace cobra {
             // Lower (~a) & c  =  c - (a & c)  when a has variables
             if (expr.kind == Expr::Kind::kAnd && IsPurelyBitwise(expr) && HasVariable(expr)) {
                 for (size_t side = 0; side < 2; ++side) {
+                    ::cobra::budget::Checkpoint();
                     const auto &lhs = *expr.children[side];
                     const auto &rhs = *expr.children[1 - side];
                     if (lhs.kind != Expr::Kind::kNot) { continue; }
@@ -368,22 +369,20 @@ namespace cobra {
 
     } // namespace
 
-    Result< SemilinearIR > NormalizeToSemilinear(
-        const Expr &expr, [[maybe_unused]] const std::vector< std::string > &vars,
-        uint32_t bitwidth
-    ) {
-        COBRA_TRACE(
-            "Semilinear", "NormalizeToSemilinear: vars={} bitwidth={}", vars.size(), bitwidth
-        );
+    Result< SemilinearIR >
+    NormalizeToSemilinear(const Expr &expr,
+                          [[maybe_unused]] const cobra::BudgetVector< std::string > &vars,
+                          uint32_t bitwidth) {
+        COBRA_TRACE("Semilinear", "NormalizeToSemilinear: vars={} bitwidth={}", vars.size(),
+                    bitwidth);
         // bitwidth=0 makes Bitmask(0) return 0, which would zero every
         // coefficient and drop every term — the pipeline silently emits
         // Constant(0) for any input. bitwidth>64 has no meaningful
         // interpretation in this 64-bit modular ring.
         if (bitwidth == 0 || bitwidth > 64) {
-            return Err< SemilinearIR >(
-                CobraError::kInvalidArgument,
-                "bitwidth must be in [1, 64]; got " + std::to_string(bitwidth)
-            );
+            return Err< SemilinearIR >(CobraError::kInvalidArgument,
+                                       "bitwidth must be in [1, 64]; got "
+                                           + std::to_string(bitwidth));
         }
         CollectCtx ctx; // NOLINT(misc-const-correctness)
         ctx.bitwidth = bitwidth;
@@ -392,16 +391,15 @@ namespace cobra {
         auto result = CollectTerms(ctx, expr, 1);
 
         if (ctx.encountered_nonlinear) {
-            return Err< SemilinearIR >(
-                CobraError::kNonLinearInput,
-                "expression is not semilinear (variable*variable "
-                "multiplication or shift of non-bitwise operand)"
-            );
+            return Err< SemilinearIR >(CobraError::kNonLinearInput,
+                                       "expression is not semilinear (variable*variable "
+                                       "multiplication or shift of non-bitwise operand)");
         }
 
         // Group terms by AtomId, summing coefficients mod 2^w
-        std::unordered_map< AtomId, uint64_t > coeff_map;
+        cobra::BudgetMap< AtomId, uint64_t > coeff_map;
         for (const auto &t : result.terms) {
+            ::cobra::budget::Checkpoint();
             coeff_map[t.atom_id] = (coeff_map[t.atom_id] + t.coeff) & ctx.mask;
         }
 
@@ -410,20 +408,18 @@ namespace cobra {
         ir.bitwidth   = bitwidth;
         ir.atom_table = std::move(ctx.atom_table);
 
-        COBRA_TRACE(
-            "Semilinear", "NormalizeToSemilinear: terms={} atoms={}", result.terms.size(),
-            ir.atom_table.size()
-        );
+        COBRA_TRACE("Semilinear", "NormalizeToSemilinear: terms={} atoms={}",
+                    result.terms.size(), ir.atom_table.size());
 
         for (const auto &[atom_id, coeff] : coeff_map) {
+            ::cobra::budget::Checkpoint();
             if (coeff != 0) { ir.terms.push_back({ .coeff = coeff, .atom_id = atom_id }); }
         }
 
         // Sort terms by atom_id for deterministic output
         std::sort(
             ir.terms.begin(), ir.terms.end(),
-            [](const WeightedAtom &a, const WeightedAtom &b) { return a.atom_id < b.atom_id; }
-        );
+            [](const WeightedAtom &a, const WeightedAtom &b) { return a.atom_id < b.atom_id; });
 
         return Ok(std::move(ir));
     }

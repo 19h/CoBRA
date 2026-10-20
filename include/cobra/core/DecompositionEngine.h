@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Classification.h"
 #include "cobra/core/Expr.h"
@@ -29,8 +30,8 @@ namespace cobra {
     struct DecompositionContext
     {
         const Options &opts;
-        const std::vector< std::string > &vars;
-        const std::vector< uint64_t > &sig;
+        const cobra::BudgetVector< std::string > &vars;
+        const cobra::BudgetVector< uint64_t > &sig;
         const Expr *current_expr;
         const Classification &cls;
     };
@@ -57,8 +58,8 @@ namespace cobra {
     SolverResult< CoreCandidate > ExtractProductCore(const DecompositionContext &ctx);
 
     // Core extractor: polynomial recovery at a specific degree.
-    SolverResult< CoreCandidate >
-    ExtractPolyCore(const DecompositionContext &ctx, uint8_t degree);
+    SolverResult< CoreCandidate > ExtractPolyCore(const DecompositionContext &ctx,
+                                                  uint8_t degree);
 
     // Core acceptance screen for polynomial extractors.
     bool AcceptCore(const DecompositionContext &ctx, const CoreCandidate &core);
@@ -71,7 +72,7 @@ namespace cobra {
     // Precondition: bitwidth must be in [1, 64]. The orchestrator's
     // Simplify entry already enforces this; debug builds assert at the
     // function boundary as defense-in-depth.
-    Evaluator
-    BuildRemainderEvaluator(const Evaluator &original, const Expr &prefix, uint32_t bitwidth);
+    Evaluator BuildRemainderEvaluator(const Evaluator &original, const Expr &prefix,
+                                      uint32_t bitwidth);
 
 } // namespace cobra

@@ -1,5 +1,6 @@
 #include "cobra/core/CoBExprBuilder.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/ExprUtils.h"
 #include "cobra/core/Trace.h"
@@ -26,10 +27,12 @@ namespace cobra {
         };
 
         // Build sorted indices by (popcount, mask value) for greedy pairing.
-        std::vector< size_t > SortedByPopcount(const std::vector< Term > &terms) {
-            std::vector< size_t > indices;
+        cobra::BudgetVector< size_t >
+        SortedByPopcount(const cobra::BudgetVector< Term > &terms) {
+            cobra::BudgetVector< size_t > indices;
             indices.reserve(terms.size());
             for (size_t i = 0; i < terms.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (terms[i].mask != 0) { // skip constant term
                     indices.push_back(i);
                 }
@@ -44,17 +47,18 @@ namespace cobra {
         }
 
         // NOLINTNEXTLINE(readability-identifier-naming)
-        void GreedyRewrite(
-            std::vector< Term > &terms, std::unordered_map< uint64_t, size_t > &mask_index,
-            uint32_t bitwidth
-        ) {
+        void GreedyRewrite(cobra::BudgetVector< Term > &terms,
+                           cobra::BudgetMap< uint64_t, size_t > &mask_index,
+                           uint32_t bitwidth) {
             auto sorted = SortedByPopcount(terms);
 
             for (size_t si = 0; si < sorted.size(); ++si) {
+                ::cobra::budget::Checkpoint();
                 const size_t i = sorted[si];
                 if (terms[i].consumed) { continue; }
 
                 for (size_t sj = si + 1; sj < sorted.size(); ++sj) {
+                    ::cobra::budget::Checkpoint();
                     const size_t j = sorted[sj];
                     if (terms[j].consumed) { continue; }
                     if (terms[i].consumed) { break; }
@@ -90,21 +94,18 @@ namespace cobra {
                         auto rhs     = build_operand(terms[j]);
                         auto or_expr = Expr::BitwiseOr(std::move(lhs), std::move(rhs));
 
-                        COBRA_TRACE(
-                            "CoBBuilder",
-                            "GreedyRewrite: OR match masks=0x{:x},0x{:x} coeff={}", m1, m2, c
-                        );
+                        COBRA_TRACE("CoBBuilder",
+                                    "GreedyRewrite: OR match masks=0x{:x},0x{:x} coeff={}", m1,
+                                    m2, c);
 
                         terms[i].consumed = true;
                         terms[j].consumed = true;
                         if (union_idx < terms.size()) { terms[union_idx].consumed = true; }
 
-                        terms.push_back(
-                            { .mask     = m_union,
-                              .coeff    = c,
-                              .expr     = std::move(or_expr),
-                              .consumed = false }
-                        );
+                        terms.push_back({ .mask     = m_union,
+                                          .coeff    = c,
+                                          .expr     = std::move(or_expr),
+                                          .consumed = false });
                         break; // compound terms don't re-enter pairing
                     }
 
@@ -115,36 +116,33 @@ namespace cobra {
                         auto rhs      = build_operand(terms[j]);
                         auto xor_expr = Expr::BitwiseXor(std::move(lhs), std::move(rhs));
 
-                        COBRA_TRACE(
-                            "CoBBuilder",
-                            "GreedyRewrite: XOR match masks=0x{:x},0x{:x} coeff={}", m1, m2, c
-                        );
+                        COBRA_TRACE("CoBBuilder",
+                                    "GreedyRewrite: XOR match masks=0x{:x},0x{:x} coeff={}", m1,
+                                    m2, c);
 
                         terms[i].consumed = true;
                         terms[j].consumed = true;
                         if (union_idx < terms.size()) { terms[union_idx].consumed = true; }
 
-                        terms.push_back(
-                            { .mask     = m_union,
-                              .coeff    = c,
-                              .expr     = std::move(xor_expr),
-                              .consumed = false }
-                        );
+                        terms.push_back({ .mask     = m_union,
+                                          .coeff    = c,
+                                          .expr     = std::move(xor_expr),
+                                          .consumed = false });
                         break; // compound terms don't re-enter pairing
                     }
                 }
             }
         }
 
-        bool TryNotRecognition(
-            std::vector< Term > &terms, uint64_t const_coeff, uint32_t bitwidth
-        ) { // NOLINT(readability-identifier-naming)
+        bool TryNotRecognition(cobra::BudgetVector< Term > &terms, uint64_t const_coeff,
+                               uint32_t bitwidth) { // NOLINT(readability-identifier-naming)
             const uint64_t neg1 = Bitmask(bitwidth);
             if (const_coeff != neg1) { return false; }
 
             // Find exactly one unconsumed non-constant term with coeff == -1
             size_t match = terms.size();
             for (size_t i = 0; i < terms.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 if (terms[i].consumed || terms[i].mask == 0) { continue; }
                 if (terms[i].coeff != neg1) { return false; }
                 if (match < terms.size()) {
@@ -160,35 +158,30 @@ namespace cobra {
             terms[match].expr     = Expr::BitwiseNot(std::move(operand));
             terms[match].coeff    = 1;
             terms[match].consumed = false;
-            COBRA_TRACE(
-                "CoBBuilder", "NotRecognition: match at mask=0x{:x}", terms[match].mask
-            );
+            COBRA_TRACE("CoBBuilder", "NotRecognition: match at mask=0x{:x}",
+                        terms[match].mask);
             return true;
         }
 
     } // namespace
 
-    std::unique_ptr< Expr > BuildCobExpr(
-        const std::vector< uint64_t > &coeffs, uint32_t /*num_vars*/, uint32_t bitwidth
-    ) {
+    std::unique_ptr< Expr > BuildCobExpr(const cobra::BudgetVector< uint64_t > &coeffs,
+                                         uint32_t /*num_vars*/, uint32_t bitwidth) {
         // Step 1: Collect non-zero terms
-        std::vector< Term > terms;
-        std::unordered_map< uint64_t, size_t > mask_index;
+        cobra::BudgetVector< Term > terms;
+        cobra::BudgetMap< uint64_t, size_t > mask_index;
         uint64_t const_coeff = coeffs[0];
-        COBRA_TRACE(
-            "CoBBuilder", "BuildCobExpr: coeff_count={} const_coeff={} bitwidth={}",
-            coeffs.size(), const_coeff, bitwidth
-        );
+        COBRA_TRACE("CoBBuilder", "BuildCobExpr: coeff_count={} const_coeff={} bitwidth={}",
+                    coeffs.size(), const_coeff, bitwidth);
 
         for (size_t i = 1; i < coeffs.size(); ++i) {
+            ::cobra::budget::Checkpoint();
             if (coeffs[i] == 0) { continue; }
             const size_t kIdx = terms.size();
-            terms.push_back(
-                { .mask     = static_cast< uint64_t >(i),
-                  .coeff    = coeffs[i],
-                  .expr     = nullptr,
-                  .consumed = false }
-            );
+            terms.push_back({ .mask     = static_cast< uint64_t >(i),
+                              .coeff    = coeffs[i],
+                              .expr     = nullptr,
+                              .consumed = false });
             mask_index[static_cast< uint64_t >(i)] = kIdx;
         }
 
@@ -207,6 +200,7 @@ namespace cobra {
         if (const_coeff != 0) { result = Expr::Constant(const_coeff); }
 
         for (auto &t : terms) {
+            ::cobra::budget::Checkpoint();
             if (t.consumed) { continue; }
 
             std::unique_ptr< Expr > term_expr;

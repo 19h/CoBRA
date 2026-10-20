@@ -1,5 +1,6 @@
 #include "cobra/core/Simplifier.h"
 #include "SimplifierInternal.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/ExprUtils.h"
 #include "cobra/core/SignatureChecker.h"
@@ -13,11 +14,10 @@ namespace cobra {
 
     namespace internal {
 
-        CheckResult VerifyInOriginalSpace(
-            const Evaluator &eval, const std::vector< std::string > &all_vars,
-            const std::vector< std::string > &real_vars, const Expr &reduced_expr,
-            uint32_t bitwidth
-        ) {
+        CheckResult VerifyInOriginalSpace(const Evaluator &eval,
+                                          const cobra::BudgetVector< std::string > &all_vars,
+                                          const cobra::BudgetVector< std::string > &real_vars,
+                                          const Expr &reduced_expr, uint32_t bitwidth) {
             const auto kAllCount = static_cast< uint32_t >(all_vars.size());
             if (real_vars.empty() || real_vars.size() == all_vars.size()) {
                 return FullWidthCheckEval(eval, kAllCount, reduced_expr, bitwidth);
@@ -39,9 +39,8 @@ namespace cobra {
                 default:
                     return false;
             }
-            return std::ranges::all_of(e.children, [](const auto &child) {
-                return IsPurelyArithmetic(*child);
-            });
+            return std::ranges::all_of(
+                e.children, [](const auto &child) { return IsPurelyArithmetic(*child); });
         }
 
         bool HasNotOverArith(const Expr &e) {
@@ -50,15 +49,15 @@ namespace cobra {
             {
                 return true;
             }
-            return std::ranges::any_of(e.children, [](const auto &child) {
-                return HasNotOverArith(*child);
-            });
+            return std::ranges::any_of(
+                e.children, [](const auto &child) { return HasNotOverArith(*child); });
         }
 
-        std::unique_ptr< Expr > LowerNotOverArith(
-            std::unique_ptr< Expr > e, uint32_t bitwidth
-        ) { // NOLINT(readability-identifier-naming)
+        std::unique_ptr< Expr >
+        LowerNotOverArith(std::unique_ptr< Expr > e,
+                          uint32_t bitwidth) { // NOLINT(readability-identifier-naming)
             for (auto &child : e->children) {
+                ::cobra::budget::Checkpoint();
                 child = LowerNotOverArith(std::move(child), bitwidth);
             }
 

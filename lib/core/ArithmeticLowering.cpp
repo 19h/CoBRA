@@ -1,5 +1,6 @@
 #include "cobra/core/ArithmeticLowering.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/MonomialKey.h"
 #include "cobra/core/PolyIR.h"
 #include "cobra/core/Result.h"
@@ -15,19 +16,17 @@
 
 namespace cobra {
 
-    Result< LoweringResult > LowerArithmeticFragment(
-        const std::vector< Coeff > &and_coeffs, const std::vector< Coeff > &mul_coeffs,
-        uint8_t num_vars, uint32_t bitwidth
-    ) {
-        COBRA_TRACE(
-            "ArithLowering", "LowerArithmeticFragment: vars={} bitwidth={}", num_vars, bitwidth
-        );
+    Result< LoweringResult >
+    LowerArithmeticFragment(const cobra::BudgetVector< Coeff > &and_coeffs,
+                            const cobra::BudgetVector< Coeff > &mul_coeffs, uint8_t num_vars,
+                            uint32_t bitwidth) {
+        COBRA_TRACE("ArithLowering", "LowerArithmeticFragment: vars={} bitwidth={}", num_vars,
+                    bitwidth);
         if (num_vars > kMaxPolyVars) {
             return Err< LoweringResult >(
                 CobraError::kTooManyVariables,
                 "lower_arithmetic_fragment: num_vars (" + std::to_string(num_vars)
-                    + ") exceeds kMaxPolyVars (" + std::to_string(kMaxPolyVars) + ")"
-            );
+                    + ") exceeds kMaxPolyVars (" + std::to_string(kMaxPolyVars) + ")");
         }
         const size_t kLen = size_t{ 1 } << num_vars;
         assert(and_coeffs.size() == kLen && mul_coeffs.size() == kLen);
@@ -38,11 +37,12 @@ namespace cobra {
         poly.num_vars = num_vars;
         poly.bitwidth = bitwidth;
 
-        std::vector< Coeff > residual(and_coeffs);
+        cobra::BudgetVector< Coeff > residual(and_coeffs);
 
         // Singleton terms: and_coeffs[1<<i] as x_i,
         // mul_coeffs[1<<i] as x_i^2
         for (uint8_t i = 0; i < num_vars; ++i) {
+            ::cobra::budget::Checkpoint();
             const uint64_t kSingleton = 1ULL << i;
             const Coeff kLinear       = and_coeffs[kSingleton] & kMask;
             const Coeff kSquare       = mul_coeffs[kSingleton] & kMask;
@@ -66,12 +66,14 @@ namespace cobra {
 
         // Multi-variable products: transfer mul_coeffs[m] for |m|>=2
         for (size_t m = 0; m < kLen; ++m) {
+            ::cobra::budget::Checkpoint();
             if (std::popcount(m) < 2) { continue; }
             const Coeff kC = mul_coeffs[m] & kMask;
             if (kC == 0) { continue; }
 
             std::array< uint8_t, kMaxPolyVars > exps{};
             for (uint8_t v = 0; v < num_vars; ++v) {
+                ::cobra::budget::Checkpoint();
                 if ((m & (1ULL << v)) != 0u) { exps[v] = 1; }
             }
             auto key        = MonomialKey::FromExponents(exps.data(), num_vars);
@@ -80,6 +82,7 @@ namespace cobra {
 
         // Strip zeros
         for (auto it = poly.terms.begin(); it != poly.terms.end();) {
+            ::cobra::budget::Checkpoint();
             if (it->second == 0) {
                 it = poly.terms.erase(it);
             } else {

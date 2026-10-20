@@ -1,5 +1,6 @@
 #include "cobra/core/BasisTransform.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/MathUtils.h"
 #include "cobra/core/PolyIR.h"
 #include <cstdint>
@@ -11,15 +12,15 @@ namespace cobra {
 
         enum class Direction { kToFactorial, kToMonomial };
 
-        CoeffMap TransformBasis(
-            const CoeffMap &input, uint8_t num_vars, uint32_t bitwidth, Direction dir
-        ) {
+        CoeffMap TransformBasis(const CoeffMap &input, uint8_t num_vars, uint32_t bitwidth,
+                                Direction dir) {
             const uint64_t kMask = Bitmask(bitwidth);
             CoeffMap current     = input;
 
             // Infer max degree from input
             uint8_t max_deg = 0;
             for (const auto &[key, _] : current) {
+                ::cobra::budget::Checkpoint();
                 uint8_t md = key.MaxDegree(num_vars);
                 if (md > max_deg) { max_deg = md; }
             }
@@ -31,14 +32,17 @@ namespace cobra {
                 : BuildStirlingFirstKind(max_deg, bitwidth);
 
             for (uint8_t var = 0; var < num_vars; ++var) {
+                ::cobra::budget::Checkpoint();
                 CoeffMap next;
                 for (const auto &[tuple, c] : current) {
+                    ::cobra::budget::Checkpoint();
                     const uint8_t e = tuple.ExponentAt(var);
                     if (e <= 1) {
                         next[tuple] = (next[tuple] + c) & kMask;
                     } else {
                         // Redistribute across j = 1..e using Stirling row
                         for (uint8_t j = 1; j <= e; ++j) {
+                            ::cobra::budget::Checkpoint();
                             uint64_t s_coeff = stirling[e][j];
                             if (s_coeff == 0) { continue; }
                             auto new_tuple = tuple.WithExponent(var, j);
@@ -49,6 +53,7 @@ namespace cobra {
                 }
                 // Strip zeros
                 for (auto it = next.begin(); it != next.end();) {
+                    ::cobra::budget::Checkpoint();
                     if (it->second == 0) {
                         it = next.erase(it);
                     } else {

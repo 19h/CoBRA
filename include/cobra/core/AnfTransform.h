@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 #include "cobra/core/PackedAnf.h"
@@ -15,7 +16,7 @@ namespace cobra {
     // Output: packed ANF coefficient bitvector of length 2^n.
     //   coefficient[m] == 1 means the monomial ∏_{i ∈ bits(m)} x_i
     //   is present in the ANF. coefficient[0] is the constant term.
-    PackedAnf ComputeAnf(const std::vector< uint64_t > &sig, uint32_t num_vars);
+    PackedAnf ComputeAnf(const cobra::BudgetVector< uint64_t > &sig, uint32_t num_vars);
 
     // Build an Expr from ANF coefficients using only XOR and AND.
     //

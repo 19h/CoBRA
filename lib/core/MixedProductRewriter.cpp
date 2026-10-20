@@ -1,4 +1,5 @@
 #include "cobra/core/MixedProductRewriter.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Classification.h"
 #include "cobra/core/Classifier.h"
 #include "cobra/core/Expr.h"
@@ -12,7 +13,10 @@ namespace cobra {
 
     uint32_t NodeCount(const Expr &expr) {
         uint32_t count = 1;
-        for (const auto &child : expr.children) { count += NodeCount(*child); }
+        for (const auto &child : expr.children) {
+            ::cobra::budget::Checkpoint();
+            count += NodeCount(*child);
+        }
         return count;
     }
 
@@ -37,6 +41,7 @@ namespace cobra {
                 if (HasVarDep(expr)) { return true; }
             }
             for (const auto &c : expr.children) {
+                ::cobra::budget::Checkpoint();
                 if (HasArithVar(*c)) { return true; }
             }
             return false;
@@ -81,7 +86,10 @@ namespace cobra {
                 count += 1;
             }
 
-            for (const auto &c : expr.children) { count += CountSitesImpl(*c, child_ctx); }
+            for (const auto &c : expr.children) {
+                ::cobra::budget::Checkpoint();
+                count += CountSitesImpl(*c, child_ctx);
+            }
 
             return count;
         }
@@ -89,9 +97,9 @@ namespace cobra {
         // Apply XOR lowering: x ^ y -> x + y - 2*(x & y)
         // Only in unsupported contexts.
         // NOLINTNEXTLINE(readability-identifier-naming)
-        std::unique_ptr< Expr > ApplyXorLoweringImpl(
-            std::unique_ptr< Expr > expr, const RewriteContext &ctx, uint32_t bitwidth
-        ) {
+        std::unique_ptr< Expr > ApplyXorLoweringImpl(std::unique_ptr< Expr > expr,
+                                                     const RewriteContext &ctx,
+                                                     uint32_t bitwidth) {
             RewriteContext child_ctx = ctx;
 
             if (expr->kind == Expr::Kind::kMul) {
@@ -124,6 +132,7 @@ namespace cobra {
 
             // Recurse into children first (bottom-up)
             for (auto &c : expr->children) {
+                ::cobra::budget::Checkpoint();
                 c = ApplyXorLoweringImpl(std::move(c), child_ctx, bitwidth);
             }
 
@@ -155,9 +164,9 @@ namespace cobra {
         return CountSitesImpl(expr, kCtx);
     }
 
-    RewriteResult RewriteMixedProducts(
-        std::unique_ptr< Expr > expr, const RewriteOptions &opts
-    ) { // NOLINT(readability-identifier-naming)
+    RewriteResult
+    RewriteMixedProducts(std::unique_ptr< Expr > expr,
+                         const RewriteOptions &opts) { // NOLINT(readability-identifier-naming)
         auto cls = ClassifyStructural(*expr);
         if (HasFlag(cls.flags, kSfHasUnknownShape)
             || !HasFlag(cls.flags, kSfHasMixedProduct | kSfHasBitwiseOverArith)
@@ -169,12 +178,10 @@ namespace cobra {
         const uint32_t initial_count = NodeCount(*expr);
         auto old_flags               = cls.flags & kUnsupportedFlagMask;
         auto old_sites               = CountRewriteableSites(*expr);
-        COBRA_TRACE(
-            "MixedRewriter",
-            "RewriteMixedProducts: max_rounds={} max_growth={} initial_nodes={} "
-            "initial_sites={}",
-            opts.max_rounds, opts.max_node_growth, initial_count, old_sites
-        );
+        COBRA_TRACE("MixedRewriter",
+                    "RewriteMixedProducts: max_rounds={} max_growth={} initial_nodes={} "
+                    "initial_sites={}",
+                    opts.max_rounds, opts.max_node_growth, initial_count, old_sites);
 
         RewriteResult result;
         result.expr              = std::move(expr);
@@ -182,31 +189,27 @@ namespace cobra {
         result.structure_changed = false;
 
         for (uint32_t round = 1; round <= opts.max_rounds; ++round) {
+            ::cobra::budget::Checkpoint();
             const RewriteContext ctx;
             auto new_expr = ApplyXorLoweringImpl(CloneExpr(*result.expr), ctx, opts.bitwidth);
 
             const uint32_t new_count = NodeCount(*new_expr);
             if (new_count > initial_count * opts.max_node_growth) {
-                COBRA_TRACE(
-                    "MixedRewriter", "Round {}: ABORT — node growth exceeded ({}>{})", round,
-                    new_count, initial_count * opts.max_node_growth
-                );
+                COBRA_TRACE("MixedRewriter", "Round {}: ABORT — node growth exceeded ({}>{})",
+                            round, new_count, initial_count * opts.max_node_growth);
                 break;
             }
 
             auto new_cls   = ClassifyStructural(*new_expr);
             auto new_flags = new_cls.flags & kUnsupportedFlagMask;
             auto new_sites = CountRewriteableSites(*new_expr);
-            COBRA_TRACE(
-                "MixedRewriter", "Round {}: nodes={} sites={} flags=0x{:x}", round, new_count,
-                new_sites, static_cast< uint32_t >(new_flags)
-            );
+            COBRA_TRACE("MixedRewriter", "Round {}: nodes={} sites={} flags=0x{:x}", round,
+                        new_count, new_sites, static_cast< uint32_t >(new_flags));
 
             // Safety: reject if new unsupported flags appeared
             if ((new_flags & ~old_flags) != StructuralFlag{ 0 }) {
-                COBRA_TRACE(
-                    "MixedRewriter", "Round {}: ABORT — new unsupported flags appeared", round
-                );
+                COBRA_TRACE("MixedRewriter", "Round {}: ABORT — new unsupported flags appeared",
+                            round);
                 break;
             }
 
@@ -214,10 +217,8 @@ namespace cobra {
             const bool coarse_progress =
                 (new_flags != old_flags) && ((new_flags & old_flags) == new_flags);
             const bool fine_progress = (new_sites < old_sites);
-            COBRA_TRACE(
-                "MixedRewriter", "Round {}: coarse_progress={} fine_progress={}", round,
-                coarse_progress, fine_progress
-            );
+            COBRA_TRACE("MixedRewriter", "Round {}: coarse_progress={} fine_progress={}", round,
+                        coarse_progress, fine_progress);
 
             if (!coarse_progress && !fine_progress) {
                 COBRA_TRACE("MixedRewriter", "Round {}: STOP — no progress", round);
@@ -236,10 +237,8 @@ namespace cobra {
             }
         }
 
-        COBRA_TRACE(
-            "MixedRewriter", "RewriteMixedProducts: total_rounds={} changed={}",
-            result.rounds_applied, result.structure_changed
-        );
+        COBRA_TRACE("MixedRewriter", "RewriteMixedProducts: total_rounds={} changed={}",
+                    result.rounds_applied, result.structure_changed);
         return result;
     }
 

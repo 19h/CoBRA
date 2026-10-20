@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/PassContract.h"
 #include "cobra/core/PolyIR.h"
@@ -36,10 +37,10 @@ namespace cobra {
     // (mapped via support_vars) with num_vars = total_num_vars.
     //
     // Does NOT verify beyond the grid.
-    SolverResult< WeightedFitResult > RecoverWeightedPoly(
-        const Evaluator &target, const WeightFn &weight,
-        const std::vector< uint32_t > &support_vars, uint32_t total_num_vars, uint32_t bitwidth,
-        uint8_t max_degree = 2, uint8_t grid_degree = 2
-    );
+    SolverResult< WeightedFitResult >
+    RecoverWeightedPoly(const Evaluator &target, const WeightFn &weight,
+                        const cobra::BudgetVector< uint32_t > &support_vars,
+                        uint32_t total_num_vars, uint32_t bitwidth, uint8_t max_degree = 2,
+                        uint8_t grid_degree = 2);
 
 } // namespace cobra

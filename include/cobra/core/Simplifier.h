@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Classification.h"
 #include "cobra/core/Evaluator.h"
@@ -23,9 +24,8 @@ namespace cobra {
         Evaluator evaluator;
     };
 
-    Result< SimplifyOutcome > Simplify(
-        const std::vector< uint64_t > &sig, const std::vector< std::string > &vars,
-        const Expr *input_expr, const Options &opts
-    );
+    Result< SimplifyOutcome > Simplify(const cobra::BudgetVector< uint64_t > &sig,
+                                       const cobra::BudgetVector< std::string > &vars,
+                                       const Expr *input_expr, const Options &opts);
 
 } // namespace cobra

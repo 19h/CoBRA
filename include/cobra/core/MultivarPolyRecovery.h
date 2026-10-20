@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/Expr.h"
 #include "cobra/core/PassContract.h"
@@ -21,10 +22,10 @@ namespace cobra {
     // Returns Blocked if divisibility gate fails (proven non-polynomial)
     //
     // Non-support variables are fixed to 0 during evaluation.
-    SolverResult< NormalizedPoly > RecoverMultivarPoly(
-        const Evaluator &eval, const std::vector< uint32_t > &support_vars,
-        uint32_t total_num_vars, uint32_t bitwidth, uint8_t max_degree = 2
-    );
+    SolverResult< NormalizedPoly >
+    RecoverMultivarPoly(const Evaluator &eval,
+                        const cobra::BudgetVector< uint32_t > &support_vars,
+                        uint32_t total_num_vars, uint32_t bitwidth, uint8_t max_degree = 2);
 
     struct PolyRecoveryResult
     {
@@ -37,10 +38,10 @@ namespace cobra {
     // built Expr passes FullWidthCheckEval.
     // Returns Inapplicable if max_degree_cap < min_degree.
     // Returns Blocked if no degree produces a verified polynomial.
-    SolverResult< PolyRecoveryResult > RecoverAndVerifyPoly(
-        const Evaluator &eval, const std::vector< uint32_t > &support_vars,
-        uint32_t total_num_vars, uint32_t bitwidth, uint8_t max_degree_cap = 4,
-        uint8_t min_degree = 2
-    );
+    SolverResult< PolyRecoveryResult >
+    RecoverAndVerifyPoly(const Evaluator &eval,
+                         const cobra::BudgetVector< uint32_t > &support_vars,
+                         uint32_t total_num_vars, uint32_t bitwidth, uint8_t max_degree_cap = 4,
+                         uint8_t min_degree = 2);
 
 } // namespace cobra

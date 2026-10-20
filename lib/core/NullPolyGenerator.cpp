@@ -1,6 +1,7 @@
 #include "cobra/core/NullPolyGenerator.h"
 #include "cobra/core/BasisTransform.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/MonomialKey.h"
 #include "cobra/core/PolyIR.h"
 
@@ -26,15 +27,16 @@ namespace cobra {
         // Sample a random exponent tuple with positive V2FactorialWeight (at least one exponent
         // >= 2). Tuples with zero V2FactorialWeight are always zero in the null space and must
         // be excluded.
-        MonomialKey SampleTupleWithPositiveNullWeight(
-            std::mt19937_64 &rng, uint8_t num_vars, uint8_t max_degree
-        ) {
+        MonomialKey SampleTupleWithPositiveNullWeight(std::mt19937_64 &rng, uint8_t num_vars,
+                                                      uint8_t max_degree) {
             // Use unsigned, not uint8_t — uniform_int_distribution<uint8_t>
             // is undefined behavior per C++17 [rand.req.genl].
             std::uniform_int_distribution< unsigned > digit_dist(0, max_degree);
             std::array< uint8_t, kMaxPolyVars > exps{};
             for (;;) {
+                ::cobra::budget::Checkpoint();
                 for (uint8_t i = 0; i < num_vars; ++i) {
+                    ::cobra::budget::Checkpoint();
                     exps[i] = static_cast< uint8_t >(digit_dist(rng));
                 }
                 auto candidate = MonomialKey::FromExponents(exps.data(), num_vars);
@@ -62,6 +64,7 @@ namespace cobra {
         CoeffMap null_factorial;
 
         for (uint32_t t = 0; t < config.num_terms; ++t) {
+            ::cobra::budget::Checkpoint();
             const MonomialKey kTuple =
                 SampleTupleWithPositiveNullWeight(rng, kN, config.max_degree);
 
@@ -71,8 +74,7 @@ namespace cobra {
             if (q >= kW) {
                 // Unconstrained: any nonzero value
                 std::uniform_int_distribution< uint64_t > dist(
-                    1, (kW < 64) ? ((1ULL << kW) - 1) : UINT64_MAX
-                );
+                    1, (kW < 64) ? ((1ULL << kW) - 1) : UINT64_MAX);
                 coeff = dist(rng);
             } else {
                 // Constrained: multiple of 2^{kW-q}
@@ -87,6 +89,7 @@ namespace cobra {
 
         // Strip zeros from factorial map
         for (auto it = null_factorial.begin(); it != null_factorial.end();) {
+            ::cobra::budget::Checkpoint();
             if (it->second == 0) {
                 it = null_factorial.erase(it);
             } else {
@@ -106,11 +109,13 @@ namespace cobra {
         result.terms    = seed.terms;
 
         for (const auto &[tuple, c] : kNullMonomial) {
+            ::cobra::budget::Checkpoint();
             result.terms[tuple] = (result.terms[tuple] + c) & kMask;
         }
 
         // Strip zeros
         for (auto it = result.terms.begin(); it != result.terms.end();) {
+            ::cobra::budget::Checkpoint();
             if (it->second == 0) {
                 it = result.terms.erase(it);
             } else {
@@ -121,12 +126,12 @@ namespace cobra {
         return result;
     }
 
-    std::vector< PolyIR > GenerateEquivalentVariants(
-        const PolyIR &seed, uint32_t count, const NullPolyConfig &config
-    ) {
-        std::vector< PolyIR > variants;
+    cobra::BudgetVector< PolyIR > GenerateEquivalentVariants(const PolyIR &seed, uint32_t count,
+                                                             const NullPolyConfig &config) {
+        cobra::BudgetVector< PolyIR > variants;
         variants.reserve(count);
         for (uint32_t i = 0; i < count; ++i) {
+            ::cobra::budget::Checkpoint();
             NullPolyConfig variant_config = config; // NOLINT(misc-const-correctness)
             variant_config.rng_seed       = Splitmix64(config.rng_seed ^ i);
             variants.push_back(AddNullPolynomial(seed, variant_config));

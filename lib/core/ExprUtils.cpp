@@ -1,5 +1,6 @@
 #include "cobra/core/ExprUtils.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include <algorithm>
 #include <bit>
@@ -11,25 +12,33 @@
 
 namespace cobra {
 
-    std::vector< uint32_t > BuildVarSupport(
-        const std::vector< std::string > &all_vars,
-        const std::vector< std::string > &subset_vars
-    ) {
-        std::unordered_map< std::string, uint32_t > idx;
-        for (uint32_t j = 0; j < all_vars.size(); ++j) { idx[all_vars[j]] = j; }
+    cobra::BudgetVector< uint32_t >
+    BuildVarSupport(const cobra::BudgetVector< std::string > &all_vars,
+                    const cobra::BudgetVector< std::string > &subset_vars) {
+        cobra::BudgetMap< std::string, uint32_t > idx;
+        for (uint32_t j = 0; j < all_vars.size(); ++j) {
+            ::cobra::budget::Checkpoint();
+            idx[all_vars[j]] = j;
+        }
 
-        std::vector< uint32_t > support;
+        cobra::BudgetVector< uint32_t > support;
         support.reserve(subset_vars.size());
-        for (const auto &v : subset_vars) { support.push_back(idx.at(v)); }
+        for (const auto &v : subset_vars) {
+            ::cobra::budget::Checkpoint();
+            support.push_back(idx.at(v));
+        }
         return support;
     }
 
-    void RemapVarIndices(Expr &expr, const std::vector< uint32_t > &index_map) {
+    void RemapVarIndices(Expr &expr, const cobra::BudgetVector< uint32_t > &index_map) {
         if (expr.kind == Expr::Kind::kVariable) {
             expr.var_index = index_map.at(expr.var_index);
             return;
         }
-        for (auto &child : expr.children) { RemapVarIndices(*child, index_map); }
+        for (auto &child : expr.children) {
+            ::cobra::budget::Checkpoint();
+            RemapVarIndices(*child, index_map);
+        }
     }
 
     bool ExprStructurallyEqual(const Expr &lhs, const Expr &rhs) {
@@ -39,6 +48,7 @@ namespace cobra {
             return false;
         }
         for (size_t i = 0; i < lhs.children.size(); ++i) {
+            ::cobra::budget::Checkpoint();
             if (!ExprStructurallyEqual(*lhs.children[i], *rhs.children[i])) { return false; }
         }
         return true;
@@ -47,6 +57,7 @@ namespace cobra {
     std::unique_ptr< Expr > BuildAndProduct(uint64_t mask) {
         std::unique_ptr< Expr > result;
         while (mask != 0) {
+            ::cobra::budget::Checkpoint();
             const auto kBit = static_cast< uint32_t >(std::countr_zero(mask));
             auto var        = Expr::Variable(kBit);
             result =
@@ -56,9 +67,9 @@ namespace cobra {
         return result;
     }
 
-    std::unique_ptr< Expr > ApplyCoefficient(
-        std::unique_ptr< Expr > expr, uint64_t coeff, uint32_t bitwidth
-    ) { // NOLINT(readability-identifier-naming)
+    std::unique_ptr< Expr >
+    ApplyCoefficient(std::unique_ptr< Expr > expr, uint64_t coeff,
+                     uint32_t bitwidth) { // NOLINT(readability-identifier-naming)
         if (coeff == 1) { return expr; }
         if (coeff == Bitmask(bitwidth)) { return Expr::Negate(std::move(expr)); }
         return Expr::Mul(Expr::Constant(coeff), std::move(expr));
@@ -67,24 +78,25 @@ namespace cobra {
     bool IsConstantSubtree(const Expr &expr) {
         if (expr.kind == Expr::Kind::kConstant) { return true; }
         if (expr.kind == Expr::Kind::kVariable) { return false; }
-        return std::ranges::all_of(expr.children, [](const auto &child) {
-            return IsConstantSubtree(*child);
-        });
+        return std::ranges::all_of(expr.children,
+                                   [](const auto &child) { return IsConstantSubtree(*child); });
     }
 
     bool ContainsType(const Expr &expr, Expr::Kind kind) {
         if (expr.kind == kind) { return true; }
-        return std::ranges::any_of(expr.children, [kind](const auto &child) {
-            return ContainsType(*child, kind);
-        });
+        return std::ranges::any_of(
+            expr.children, [kind](const auto &child) { return ContainsType(*child, kind); });
     }
 
-    void CollectVariables(const Expr &expr, std::vector< uint32_t > &out) {
+    void CollectVariables(const Expr &expr, cobra::BudgetVector< uint32_t > &out) {
         if (expr.kind == Expr::Kind::kVariable) {
             out.push_back(expr.var_index);
             return;
         }
-        for (const auto &child : expr.children) { CollectVariables(*child, out); }
+        for (const auto &child : expr.children) {
+            ::cobra::budget::Checkpoint();
+            CollectVariables(*child, out);
+        }
     }
 
     uint64_t EvalConstantExpr(const Expr &expr, uint32_t bitwidth) {
@@ -107,19 +119,14 @@ namespace cobra {
                 return EvalConstantExpr(*expr.children[0], bitwidth)
                     ^ EvalConstantExpr(*expr.children[1], bitwidth);
             case Expr::Kind::kAdd:
-                return ModAdd(
-                    EvalConstantExpr(*expr.children[0], bitwidth),
-                    EvalConstantExpr(*expr.children[1], bitwidth), bitwidth
-                );
+                return ModAdd(EvalConstantExpr(*expr.children[0], bitwidth),
+                              EvalConstantExpr(*expr.children[1], bitwidth), bitwidth);
             case Expr::Kind::kMul:
-                return ModMul(
-                    EvalConstantExpr(*expr.children[0], bitwidth),
-                    EvalConstantExpr(*expr.children[1], bitwidth), bitwidth
-                );
+                return ModMul(EvalConstantExpr(*expr.children[0], bitwidth),
+                              EvalConstantExpr(*expr.children[1], bitwidth), bitwidth);
             case Expr::Kind::kShr:
-                return ModShr(
-                    EvalConstantExpr(*expr.children[0], bitwidth), expr.constant_val, bitwidth
-                );
+                return ModShr(EvalConstantExpr(*expr.children[0], bitwidth), expr.constant_val,
+                              bitwidth);
             case Expr::Kind::kVariable:
                 std::unreachable();
         }
@@ -138,19 +145,16 @@ namespace cobra {
         {
             return true;
         }
-        return std::ranges::any_of(expr.children, [](const auto &c) {
-            return HasNonleafBitwise(*c);
-        });
+        return std::ranges::any_of(expr.children,
+                                   [](const auto &c) { return HasNonleafBitwise(*c); });
     }
 
     namespace {
 
         // Flatten a left-folded binary associative chain of `kind` (kAdd or
         // kMul) into its operand list, moving each leaf out of the tree.
-        void FlattenAssoc(
-            std::unique_ptr< Expr > node, Expr::Kind kind,
-            std::vector< std::unique_ptr< Expr > > &out
-        ) {
+        void FlattenAssoc(std::unique_ptr< Expr > node, Expr::Kind kind,
+                          cobra::BudgetVector< std::unique_ptr< Expr > > &out) {
             if (node->kind == kind) {
                 FlattenAssoc(std::move(node->children[0]), kind, out);
                 FlattenAssoc(std::move(node->children[1]), kind, out);
@@ -159,10 +163,11 @@ namespace cobra {
             }
         }
 
-        std::unique_ptr< Expr >
-        FoldConstantArithmetic(std::unique_ptr< Expr > expr, uint32_t bitwidth) {
+        std::unique_ptr< Expr > FoldConstantArithmetic(std::unique_ptr< Expr > expr,
+                                                       uint32_t bitwidth) {
             // Recurse into children first.
             for (auto &child : expr->children) {
+                ::cobra::budget::Checkpoint();
                 child = FoldConstantArithmetic(std::move(child), bitwidth);
             }
 
@@ -174,12 +179,13 @@ namespace cobra {
             // Flatten Add chains and combine constant terms.
             if (expr->kind != Expr::Kind::kAdd) { return expr; }
 
-            std::vector< std::unique_ptr< Expr > > terms;
+            cobra::BudgetVector< std::unique_ptr< Expr > > terms;
             FlattenAssoc(std::move(expr), Expr::Kind::kAdd, terms);
 
             uint64_t const_sum = 0;
-            std::vector< std::unique_ptr< Expr > > non_const;
+            cobra::BudgetVector< std::unique_ptr< Expr > > non_const;
             for (auto &t : terms) {
+                ::cobra::budget::Checkpoint();
                 if (t->kind == Expr::Kind::kConstant) {
                     const_sum = ModAdd(const_sum, t->constant_val, bitwidth);
                 } else {
@@ -192,6 +198,7 @@ namespace cobra {
 
             auto result = std::move(non_const[0]);
             for (size_t i = 1; i < non_const.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 result = Expr::Add(std::move(result), std::move(non_const[i]));
             }
             if (const_sum != 0) {
@@ -200,9 +207,10 @@ namespace cobra {
             return result;
         }
 
-        std::unique_ptr< Expr >
-        RefoldNegation(std::unique_ptr< Expr > expr, uint32_t bitwidth) {
+        std::unique_ptr< Expr > RefoldNegation(std::unique_ptr< Expr > expr,
+                                               uint32_t bitwidth) {
             for (auto &child : expr->children) {
+                ::cobra::budget::Checkpoint();
                 child = RefoldNegation(std::move(child), bitwidth);
             }
 
@@ -229,9 +237,11 @@ namespace cobra {
         }
 
         // Rebuild a left-folded Mul chain from a factor list.
-        std::unique_ptr< Expr > RebuildMul(std::vector< std::unique_ptr< Expr > > &factors) {
+        std::unique_ptr< Expr >
+        RebuildMul(cobra::BudgetVector< std::unique_ptr< Expr > > &factors) {
             auto result = std::move(factors[0]);
             for (size_t i = 1; i < factors.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 result = Expr::Mul(std::move(result), std::move(factors[i]));
             }
             return result;
@@ -243,13 +253,14 @@ namespace cobra {
         std::unique_ptr< Expr > ExtractCommonFactor(std::unique_ptr< Expr > expr) {
             // Recurse into children first.
             for (auto &child : expr->children) {
+                ::cobra::budget::Checkpoint();
                 child = ExtractCommonFactor(std::move(child));
             }
 
             if (expr->kind != Expr::Kind::kAdd) { return expr; }
 
             // Flatten the Add chain.
-            std::vector< std::unique_ptr< Expr > > terms;
+            cobra::BudgetVector< std::unique_ptr< Expr > > terms;
             FlattenAssoc(std::move(expr), Expr::Kind::kAdd, terms);
 
             if (terms.size() < 2) {
@@ -260,12 +271,11 @@ namespace cobra {
             // For each term, flatten its Mul chain into factors.
             // Separate constants from non-constants.
             struct TermFactors
-            {
-                std::vector< std::unique_ptr< Expr > > factors;
-            };
+            { cobra::BudgetVector< std::unique_ptr< Expr > > factors; };
 
-            std::vector< TermFactors > all_factors;
+            cobra::BudgetVector< TermFactors > all_factors;
             for (auto &t : terms) {
+                ::cobra::budget::Checkpoint();
                 TermFactors tf;
                 if (t->kind == Expr::Kind::kMul) {
                     FlattenAssoc(std::move(t), Expr::Kind::kMul, tf.factors);
@@ -278,6 +288,7 @@ namespace cobra {
             // For each non-constant factor in the first term, check if
             // it appears (structurally) in ALL other terms.
             for (size_t fi = 0; fi < all_factors[0].factors.size(); ++fi) {
+                ::cobra::budget::Checkpoint();
                 auto &candidate = all_factors[0].factors[fi];
                 if (candidate->kind == Expr::Kind::kConstant) { continue; }
                 if (candidate->kind == Expr::Kind::kVariable) { continue; }
@@ -285,11 +296,13 @@ namespace cobra {
                 // Check all other terms for this factor, matching on exact
                 // structural equality (never a false positive, unlike a hash).
                 bool universal = true;
-                std::vector< size_t > match_indices;
+                cobra::BudgetVector< size_t > match_indices;
                 match_indices.push_back(fi);
                 for (size_t ti = 1; ti < all_factors.size(); ++ti) {
+                    ::cobra::budget::Checkpoint();
                     bool found = false;
                     for (size_t fj = 0; fj < all_factors[ti].factors.size(); ++fj) {
+                        ::cobra::budget::Checkpoint();
                         auto &f = all_factors[ti].factors[fj];
                         if (f->kind == Expr::Kind::kConstant) { continue; }
                         if (ExprStructurallyEqual(*f, *candidate)) {
@@ -310,8 +323,9 @@ namespace cobra {
                 auto common = std::move(all_factors[0].factors[fi]);
 
                 // Remove the common factor from each term and rebuild remainders.
-                std::vector< std::unique_ptr< Expr > > remainders;
+                cobra::BudgetVector< std::unique_ptr< Expr > > remainders;
                 for (size_t ti = 0; ti < all_factors.size(); ++ti) {
+                    ::cobra::budget::Checkpoint();
                     auto &tf = all_factors[ti].factors;
                     tf.erase(tf.begin() + static_cast< ptrdiff_t >(match_indices[ti]));
                     if (tf.empty()) {
@@ -324,6 +338,7 @@ namespace cobra {
                 // Rebuild: (remainder_0 + remainder_1 + ...) * common
                 auto sum = std::move(remainders[0]);
                 for (size_t i = 1; i < remainders.size(); ++i) {
+                    ::cobra::budget::Checkpoint();
                     sum = Expr::Add(std::move(sum), std::move(remainders[i]));
                 }
                 // Recurse — there might be more common factors in the sum.
@@ -332,10 +347,14 @@ namespace cobra {
             }
 
             // No universal factor found. Rebuild original Add chain.
-            std::vector< std::unique_ptr< Expr > > rebuilt_terms;
-            for (auto &tf : all_factors) { rebuilt_terms.push_back(RebuildMul(tf.factors)); }
+            cobra::BudgetVector< std::unique_ptr< Expr > > rebuilt_terms;
+            for (auto &tf : all_factors) {
+                ::cobra::budget::Checkpoint();
+                rebuilt_terms.push_back(RebuildMul(tf.factors));
+            }
             auto result = std::move(rebuilt_terms[0]);
             for (size_t i = 1; i < rebuilt_terms.size(); ++i) {
+                ::cobra::budget::Checkpoint();
                 result = Expr::Add(std::move(result), std::move(rebuilt_terms[i]));
             }
             return result;
@@ -362,9 +381,8 @@ namespace cobra {
         bool IsPureProduct(const Expr &e) {
             if (e.kind == Expr::Kind::kVariable) { return true; }
             if (e.kind == Expr::Kind::kAnd || e.kind == Expr::Kind::kMul) {
-                return std::ranges::all_of(e.children, [](const auto &c) {
-                    return IsPureProduct(*c);
-                });
+                return std::ranges::all_of(e.children,
+                                           [](const auto &c) { return IsPureProduct(*c); });
             }
             return false;
         }
@@ -372,7 +390,10 @@ namespace cobra {
     } // namespace
 
     std::unique_ptr< Expr > RepairProductShadow(std::unique_ptr< Expr > expr) {
-        for (auto &child : expr->children) { child = RepairProductShadow(std::move(child)); }
+        for (auto &child : expr->children) {
+            ::cobra::budget::Checkpoint();
+            child = RepairProductShadow(std::move(child));
+        }
 
         if (expr->kind == Expr::Kind::kAnd && expr->children.size() == 2
             && IsPureProduct(*expr->children[0]) && IsPureProduct(*expr->children[1]))

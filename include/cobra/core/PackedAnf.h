@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include <cstdint>
 #include <initializer_list>
@@ -8,18 +9,18 @@ namespace cobra {
 
     class PackedAnf
     {
-        std::vector< uint64_t > words_;
+        cobra::BudgetVector< uint64_t > words_;
         size_t size_;
 
       public:
         explicit PackedAnf(size_t n) : words_((n + 63) / 64, 0), size_(n) {}
 
-        PackedAnf(
-            std::initializer_list< uint8_t > bits
-        ) // NOLINT(google-explicit-constructor,hicpp-explicit-conversions)
+        PackedAnf(std::initializer_list< uint8_t >
+                      bits) // NOLINT(google-explicit-constructor,hicpp-explicit-conversions)
             : words_((bits.size() + 63) / 64, 0), size_(bits.size()) {
             size_t i = 0;
             for (auto b : bits) {
+                ::cobra::budget::Checkpoint();
                 if (b != 0u) { Set(i); }
                 ++i;
             }

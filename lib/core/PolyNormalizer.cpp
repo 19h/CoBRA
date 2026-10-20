@@ -1,5 +1,6 @@
 #include "cobra/core/PolyNormalizer.h"
 #include "cobra/core/BasisTransform.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/PolyIR.h"
 #include <cstdint>
 #include <utility>
@@ -15,6 +16,7 @@ namespace cobra {
 
         // Step 2: Coefficient reduction — mod 2^{kW - v2(e!)} per entry
         for (auto it = current.begin(); it != current.end();) {
+            ::cobra::budget::Checkpoint();
             uint32_t q = it->first.V2FactorialWeight(kN);
             if (q >= kW) {
                 it = current.erase(it);

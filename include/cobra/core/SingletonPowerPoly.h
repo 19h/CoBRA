@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/BitWidth.h"
 #include "cobra/core/MathUtils.h"
@@ -24,7 +25,7 @@ namespace cobra {
         // - degrees are unique
         // - 1 <= degree < DegreeCap(bitwidth)
         // - 0 < coeff < 2^{bitwidth - TwosInFactorial(degree)}
-        std::vector< UnivariateTerm > terms;
+        cobra::BudgetVector< UnivariateTerm > terms;
     };
 
     struct SingletonPowerResult
@@ -34,7 +35,7 @@ namespace cobra {
         // One entry per variable, indexed by variable position.
         // Empty terms vector means that variable has no singleton-power
         // contribution beyond what the bitwise basis captures.
-        std::vector< UnivariateNormalizedPoly > per_var;
+        cobra::BudgetVector< UnivariateNormalizedPoly > per_var;
     };
 
 } // namespace cobra

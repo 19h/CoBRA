@@ -1,4 +1,5 @@
 #pragma once
+#include "cobra/core/Budget.h"
 
 #include "cobra/core/PolyIR.h"
 #include "cobra/core/Result.h"
@@ -9,12 +10,12 @@ namespace cobra {
     struct LoweringResult
     {
         PolyIR poly;
-        std::vector< Coeff > residual_and_coeffs;
+        cobra::BudgetVector< Coeff > residual_and_coeffs;
     };
 
-    Result< LoweringResult > LowerArithmeticFragment(
-        const std::vector< Coeff > &and_coeffs, const std::vector< Coeff > &mul_coeffs,
-        uint8_t num_vars, uint32_t bitwidth
-    );
+    Result< LoweringResult >
+    LowerArithmeticFragment(const cobra::BudgetVector< Coeff > &and_coeffs,
+                            const cobra::BudgetVector< Coeff > &mul_coeffs, uint8_t num_vars,
+                            uint32_t bitwidth);
 
 } // namespace cobra

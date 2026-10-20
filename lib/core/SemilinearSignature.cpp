@@ -1,5 +1,6 @@
 #include "cobra/core/SemilinearSignature.h"
 #include "cobra/core/BitWidth.h"
+#include "cobra/core/Budget.h"
 #include "cobra/core/Expr.h"
 #include "cobra/core/Trace.h"
 #include <algorithm>
@@ -15,20 +16,21 @@ namespace cobra {
         /// Bottom-up evaluation with variables taking {0, 2^bit_pos} values.
         /// Structurally identical to SignatureEval::EvalSigRecursive, but
         /// the kVariable case returns 2^bit_pos instead of 1.
-        std::vector< uint64_t > EvalSemilinearRecursive(
-            const Expr &expr, size_t len, uint32_t bitwidth, uint32_t bit_pos
-        ) {
+        cobra::BudgetVector< uint64_t > EvalSemilinearRecursive(const Expr &expr, size_t len,
+                                                                uint32_t bitwidth,
+                                                                uint32_t bit_pos) {
             const uint64_t kMask   = Bitmask(bitwidth);
             const uint64_t kBitVal = (bit_pos < 64) ? (1ULL << bit_pos) : 0;
 
             switch (expr.kind) {
                 case Expr::Kind::kConstant:
-                    return std::vector< uint64_t >(len, expr.constant_val & kMask);
+                    return cobra::BudgetVector< uint64_t >(len, expr.constant_val & kMask);
 
                 case Expr::Kind::kVariable: {
-                    std::vector< uint64_t > r(len);
+                    cobra::BudgetVector< uint64_t > r(len);
                     const uint32_t kIdx = expr.var_index;
                     for (size_t i = 0; i < len; ++i) {
+                        ::cobra::budget::Checkpoint();
                         r[i] = ((i >> kIdx) & 1) != 0 ? kBitVal : 0;
                     }
                     return r;
@@ -37,13 +39,19 @@ namespace cobra {
                 case Expr::Kind::kNot: {
                     auto child =
                         EvalSemilinearRecursive(*expr.children[0], len, bitwidth, bit_pos);
-                    for (auto &v : child) { v = (~v) & kMask; }
+                    for (auto &v : child) {
+                        ::cobra::budget::Checkpoint();
+                        v = (~v) & kMask;
+                    }
                     return child;
                 }
                 case Expr::Kind::kNeg: {
                     auto child =
                         EvalSemilinearRecursive(*expr.children[0], len, bitwidth, bit_pos);
-                    for (auto &v : child) { v = (-v) & kMask; }
+                    for (auto &v : child) {
+                        ::cobra::budget::Checkpoint();
+                        v = (-v) & kMask;
+                    }
                     return child;
                 }
                 case Expr::Kind::kShr: {
@@ -53,7 +61,10 @@ namespace cobra {
                     if (kK >= 64) {
                         std::fill(child.begin(), child.end(), 0);
                     } else {
-                        for (auto &v : child) { v = (v >> kK) & kMask; }
+                        for (auto &v : child) {
+                            ::cobra::budget::Checkpoint();
+                            v = (v >> kK) & kMask;
+                        }
                     }
                     return child;
                 }
@@ -63,7 +74,10 @@ namespace cobra {
                         EvalSemilinearRecursive(*expr.children[0], len, bitwidth, bit_pos);
                     auto right =
                         EvalSemilinearRecursive(*expr.children[1], len, bitwidth, bit_pos);
-                    for (size_t i = 0; i < len; ++i) { left[i] = (left[i] + right[i]) & kMask; }
+                    for (size_t i = 0; i < len; ++i) {
+                        ::cobra::budget::Checkpoint();
+                        left[i] = (left[i] + right[i]) & kMask;
+                    }
                     return left;
                 }
                 case Expr::Kind::kMul: {
@@ -71,7 +85,10 @@ namespace cobra {
                         EvalSemilinearRecursive(*expr.children[0], len, bitwidth, bit_pos);
                     auto right =
                         EvalSemilinearRecursive(*expr.children[1], len, bitwidth, bit_pos);
-                    for (size_t i = 0; i < len; ++i) { left[i] = (left[i] * right[i]) & kMask; }
+                    for (size_t i = 0; i < len; ++i) {
+                        ::cobra::budget::Checkpoint();
+                        left[i] = (left[i] * right[i]) & kMask;
+                    }
                     return left;
                 }
 
@@ -80,7 +97,10 @@ namespace cobra {
                         EvalSemilinearRecursive(*expr.children[0], len, bitwidth, bit_pos);
                     auto right =
                         EvalSemilinearRecursive(*expr.children[1], len, bitwidth, bit_pos);
-                    for (size_t i = 0; i < len; ++i) { left[i] = left[i] & right[i]; }
+                    for (size_t i = 0; i < len; ++i) {
+                        ::cobra::budget::Checkpoint();
+                        left[i] = left[i] & right[i];
+                    }
                     return left;
                 }
                 case Expr::Kind::kOr: {
@@ -88,7 +108,10 @@ namespace cobra {
                         EvalSemilinearRecursive(*expr.children[0], len, bitwidth, bit_pos);
                     auto right =
                         EvalSemilinearRecursive(*expr.children[1], len, bitwidth, bit_pos);
-                    for (size_t i = 0; i < len; ++i) { left[i] = (left[i] | right[i]) & kMask; }
+                    for (size_t i = 0; i < len; ++i) {
+                        ::cobra::budget::Checkpoint();
+                        left[i] = (left[i] | right[i]) & kMask;
+                    }
                     return left;
                 }
                 case Expr::Kind::kXor: {
@@ -96,18 +119,20 @@ namespace cobra {
                         EvalSemilinearRecursive(*expr.children[0], len, bitwidth, bit_pos);
                     auto right =
                         EvalSemilinearRecursive(*expr.children[1], len, bitwidth, bit_pos);
-                    for (size_t i = 0; i < len; ++i) { left[i] = (left[i] ^ right[i]) & kMask; }
+                    for (size_t i = 0; i < len; ++i) {
+                        ::cobra::budget::Checkpoint();
+                        left[i] = (left[i] ^ right[i]) & kMask;
+                    }
                     return left;
                 }
             }
-            return std::vector< uint64_t >(len, 0);
+            return cobra::BudgetVector< uint64_t >(len, 0);
         }
 
     } // namespace
 
-    std::vector< uint64_t > EvaluateSemilinearRow(
-        const Expr &expr, uint32_t num_vars, uint32_t bitwidth, uint32_t bit_pos
-    ) {
+    cobra::BudgetVector< uint64_t > EvaluateSemilinearRow(const Expr &expr, uint32_t num_vars,
+                                                          uint32_t bitwidth, uint32_t bit_pos) {
         // 1 << num_vars is UB for num_vars >= 64. Even though no
         // production code calls this evaluator today (it is reachable
         // only from tests of the per-row strategy), guard the boundary
@@ -118,7 +143,10 @@ namespace cobra {
 
         if (bit_pos > 0 && bit_pos < 64) {
             const uint64_t kMask = Bitmask(bitwidth);
-            for (auto &v : result) { v = (v >> bit_pos) & kMask; }
+            for (auto &v : result) {
+                ::cobra::budget::Checkpoint();
+                v = (v >> bit_pos) & kMask;
+            }
         }
         return result;
     }
@@ -126,8 +154,8 @@ namespace cobra {
     namespace {
 
         /// Evaluate expression at a specific variable assignment.
-        uint64_t
-        EvalAtPoint(const Expr &expr, const std::vector< uint64_t > &var_vals, uint64_t mask) {
+        uint64_t EvalAtPoint(const Expr &expr, const cobra::BudgetVector< uint64_t > &var_vals,
+                             uint64_t mask) {
             switch (expr.kind) {
                 case Expr::Kind::kConstant:
                     return expr.constant_val & mask;
@@ -172,18 +200,18 @@ namespace cobra {
     } // namespace
 
     bool IsLinearShortcut(const Expr &expr, uint32_t num_vars, uint32_t bitwidth) {
-        COBRA_TRACE(
-            "SemilinearSig", "IsLinearShortcut: vars={} bitwidth={}", num_vars, bitwidth
-        );
+        COBRA_TRACE("SemilinearSig", "IsLinearShortcut: vars={} bitwidth={}", num_vars,
+                    bitwidth);
         if (bitwidth == 0 || num_vars > 20) { return false; }
 
         const uint64_t kMask = Bitmask(bitwidth);
-        std::vector< uint64_t > assignment(num_vars, 0);
+        cobra::BudgetVector< uint64_t > assignment(num_vars, 0);
         const uint64_t kFZero = EvalAtPoint(expr, assignment, kMask);
 
         // Extract per-variable coefficient from bit 0.
-        std::vector< uint64_t > coeff(num_vars);
+        cobra::BudgetVector< uint64_t > coeff(num_vars);
         for (uint32_t j = 0; j < num_vars; ++j) {
+            ::cobra::budget::Checkpoint();
             assignment[j] = 1;
             coeff[j]      = (EvalAtPoint(expr, assignment, kMask) - kFZero) & kMask;
             assignment[j] = 0;
@@ -191,17 +219,17 @@ namespace cobra {
 
         // Verify at each bit position: delta == coeff[j] * 2^bit.
         for (uint32_t bit = 1; bit < bitwidth; ++bit) {
+            ::cobra::budget::Checkpoint();
             const uint64_t kBitVal = 1ULL << bit;
             for (uint32_t j = 0; j < num_vars; ++j) {
+                ::cobra::budget::Checkpoint();
                 assignment[j]         = kBitVal;
                 const uint64_t kDelta = (EvalAtPoint(expr, assignment, kMask) - kFZero) & kMask;
                 const uint64_t kExpect = (coeff[j] * kBitVal) & kMask;
                 if (kDelta != kExpect) {
-                    COBRA_TRACE(
-                        "SemilinearSig",
-                        "IsLinearShortcut: false (var={} bit={} delta={} expect={})", j, bit,
-                        kDelta, kExpect
-                    );
+                    COBRA_TRACE("SemilinearSig",
+                                "IsLinearShortcut: false (var={} bit={} delta={} expect={})", j,
+                                bit, kDelta, kExpect);
                     return false;
                 }
                 assignment[j] = 0;
