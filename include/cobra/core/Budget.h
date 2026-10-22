@@ -182,6 +182,9 @@ namespace cobra {
         class K, class V,
         class Hash = typename absl::container_internal::FlatHashMapPolicy< K, V >::DefaultHash,
         class Eq   = typename absl::container_internal::FlatHashMapPolicy< K, V >::DefaultEq >
+    // Budget allocation and cancellation throw during container growth.
+    // Abseil flat_hash_map explicitly has no exception-safety guarantee;
+    // use the standard node container so unwinding retains valid ownership.
     using BudgetFlatMap =
-        absl::flat_hash_map< K, V, Hash, Eq, budget::Allocator< std::pair< const K, V > > >;
+        std::unordered_map< K, V, Hash, Eq, budget::Allocator< std::pair< const K, V > > >;
 } // namespace cobra
